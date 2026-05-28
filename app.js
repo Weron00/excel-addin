@@ -1,10 +1,14 @@
 Office.onReady((info) => {
+    // Przypisanie zdarzeń niezależnie od hosta, aby w razie błędu pokazać komunikat
+    document.getElementById("btn-fetch").onclick = fetchRowData;
+    document.getElementById("btn-start").onclick = writeStartTime;
+    document.getElementById("btn-stop").onclick = handleStop;
+    document.getElementById("btn-save").onclick = saveIncidents;
+    
     if (info.host === Office.HostType.Excel) {
-        document.getElementById("btn-fetch").onclick = fetchRowData;
-        document.getElementById("btn-start").onclick = writeStartTime;
-        document.getElementById("btn-stop").onclick = handleStop;
-        document.getElementById("btn-save").onclick = saveIncidents;
-        setStatus("Gotowe. Zaznacz wiersz.");
+        setStatus("Gotowe. Zaznacz wiersz w Excelu.");
+    } else {
+        setStatus("UWAGA: Uruchom ten link jako Dodatek Wewnątrz Excela!");
     }
 });
 
