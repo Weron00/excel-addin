@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-width=1.0">
+    <title>Nakładka Sekwencji</title>
+    <!-- Office JavaScript API -->
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Panel Sterowania</h1>
+            <p>Zaznacz wiersz w arkuszu i kliknij Pobierz</p>
+        </header>
+
+        <div class="card">
+            <button id="btn-fetch" class="btn-primary">Pobierz Dane z Wiersza</button>
+            
+            <div class="data-grid">
+                <div class="data-item">
+                    <span class="label">Program (Kolumna E)</span>
+                    <span class="value" id="val-program">---</span>
+                </div>
+                <div class="data-item">
+                    <span class="label">Warstwy (Kolumna M)</span>
+                    <span class="value" id="val-warstwy">---</span>
+                </div>
+                <div class="data-item">
+                    <span class="label">Zestawy KIT (Kolumna O)</span>
+                    <span class="value" id="val-kit">---</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="actions">
+            <button id="btn-start" class="btn-action start" disabled>START</button>
+            <button id="btn-stop" class="btn-action stop" disabled>STOP</button>
+        </div>
+        
+        <div id="status-message" class="status">Czeka na akcję...</div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
