@@ -3,41 +3,72 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-width=1.0">
-    <title>Nakładka Sekwencji</title>
+    <title>Nakładka Sekwencji - Część 2</title>
     <!-- Office JavaScript API -->
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
     <link rel="stylesheet" href="styles.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="container">
         <header>
             <h1>Panel Sterowania</h1>
-            <p>Zaznacz wiersz w arkuszu i kliknij Pobierz</p>
+            <p>Zaznacz wiersz i kliknij Pobierz</p>
         </header>
 
         <div class="card">
             <button id="btn-fetch" class="btn-primary">Pobierz Dane z Wiersza</button>
             
-            <div class="data-grid">
-                <div class="data-item">
-                    <span class="label">Program (Kolumna E)</span>
-                    <span class="value" id="val-program">---</span>
+            <div id="data-section" class="hidden">
+                <div class="data-grid">
+                    <div class="data-item"><span class="label">Item (B)</span><span class="value" id="val-item">---</span></div>
+                    <div class="data-item"><span class="label">Rewizja (C)</span><span class="value" id="val-rev">---</span></div>
+                    <div class="data-item"><span class="label">Produkt (D)</span><span class="value" id="val-product">---</span></div>
+                    <div class="data-item"><span class="label">Nesting (E)</span><span class="value" id="val-nesting">---</span></div>
+                    <div class="data-item"><span class="label">Oczek. Warstwy (M)</span><span class="value" id="val-warstwy">---</span></div>
+                    <div class="data-item"><span class="label">Zestawy KIT (O)</span><span class="value" id="val-kit">---</span></div>
                 </div>
-                <div class="data-item">
-                    <span class="label">Warstwy (Kolumna M)</span>
-                    <span class="value" id="val-warstwy">---</span>
+
+                <div id="setup-form" class="form-section">
+                    <div class="input-group">
+                        <label for="in-operator">Inicjały operatora</label>
+                        <input type="text" id="in-operator" placeholder="np. AB">
+                    </div>
+                    <div class="input-group">
+                        <label for="in-workers">Liczba pracowników</label>
+                        <input type="number" id="in-workers" value="4">
+                    </div>
+                    <div class="input-group">
+                        <label for="in-real-layers">Rzeczywista l. warstw</label>
+                        <input type="number" id="in-real-layers" placeholder="Domyślnie z (M)">
+                    </div>
                 </div>
-                <div class="data-item">
-                    <span class="label">Zestawy KIT (Kolumna O)</span>
-                    <span class="value" id="val-kit">---</span>
+
+                <div class="actions">
+                    <button id="btn-start" class="btn-action start">START</button>
                 </div>
             </div>
         </div>
 
-        <div class="actions">
-            <button id="btn-start" class="btn-action start" disabled>START</button>
-            <button id="btn-stop" class="btn-action stop" disabled>STOP</button>
+        <div id="running-section" class="card hidden">
+            <div class="timer-display" id="timer">00:00:00</div>
+            <div class="actions">
+                <button id="btn-stop" class="btn-action stop">STOP</button>
+            </div>
+        </div>
+
+        <div id="incidents-section" class="card hidden">
+            <h3>Podsumowanie i Incydenty</h3>
+            <div class="checkbox-group">
+                <label><input type="checkbox" id="chk-material"> Zmiana materiału</label>
+                <label><input type="checkbox" id="chk-break"> Przerwa w trakcie</label>
+                <label><input type="checkbox" id="chk-breakdown"> Awaria</label>
+            </div>
+            <div class="input-group">
+                <label for="in-other-incidents">Inne incydenty (Opis)</label>
+                <textarea id="in-other-incidents" rows="2" placeholder="Napisz jeśli wystąpiły inne problemy..."></textarea>
+            </div>
+            <button id="btn-save" class="btn-primary" style="margin-top:12px;">Zapisz i Zakończ</button>
         </div>
         
         <div id="status-message" class="status">Czeka na akcję...</div>

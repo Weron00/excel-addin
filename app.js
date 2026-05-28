@@ -1,14 +1,29 @@
-// Zapewnienie inicjalizacji Office.js przed użyciem
 Office.onReady((info) => {
     if (info.host === Office.HostType.Excel) {
         document.getElementById("btn-fetch").onclick = fetchRowData;
         document.getElementById("btn-start").onclick = writeStartTime;
-        document.getElementById("btn-stop").onclick = writeStopTime;
-        setStatus("Dodatek załadowany pomyślnie.");
+        document.getElementById("btn-stop").onclick = handleStop;
+        document.getElementById("btn-save").onclick = saveIncidents;
+        setStatus("Gotowe. Zaznacz wiersz.");
     }
 });
 
 let currentRowIndex = -1;
+let timerInterval = null;
+let secondsElapsed = 0;
+
+function getFormattedDate() {
+    const d = new Date();
+    const datePart = `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+    let hours = d.getHours();
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12;
+    hours = hours ? hours : 12;
+    const minutes = d.getMinutes().toString().padStart(2, '0');
+    const seconds = d.getSeconds().toString().padStart(2, '0');
+    // Używamy spacji zgodnie z wymogiem np. 5/28/2026  2:27:08 AM
+    return `${datePart} ${hours}:${minutes}:${seconds} ${ampm}`;
+}
 
 async function fetchRowData() {
     try {
@@ -21,86 +36,143 @@ async function fetchRowData() {
             currentRowIndex = activeCell.rowIndex;
             const sheet = context.workbook.worksheets.getActiveWorksheet();
             
-            // Kolumny: E (indeks 4), M (indeks 12), O (indeks 14)
-            const rangeE = sheet.getCell(currentRowIndex, 4);
-            const rangeM = sheet.getCell(currentRowIndex, 12);
-            const rangeO = sheet.getCell(currentRowIndex, 14);
-            
-            rangeE.load("values");
-            rangeM.load("values");
-            rangeO.load("values");
+            // Odczyt: B(1), C(2), D(3), E(4), M(12), O(14)
+            const rangeB = sheet.getCell(currentRowIndex, 1).load("values");
+            const rangeC = sheet.getCell(currentRowIndex, 2).load("values");
+            const rangeD = sheet.getCell(currentRowIndex, 3).load("values");
+            const rangeE = sheet.getCell(currentRowIndex, 4).load("values");
+            const rangeM = sheet.getCell(currentRowIndex, 12).load("values");
+            const rangeO = sheet.getCell(currentRowIndex, 14).load("values");
             
             await context.sync();
             
-            // Wyświetlenie danych w interfejsie
-            document.getElementById("val-program").innerText = rangeE.values[0][0] || "-";
+            document.getElementById("val-item").innerText = rangeB.values[0][0] || "-";
+            document.getElementById("val-rev").innerText = rangeC.values[0][0] || "-";
+            document.getElementById("val-product").innerText = rangeD.values[0][0] || "-";
+            document.getElementById("val-nesting").innerText = rangeE.values[0][0] || "-";
             document.getElementById("val-warstwy").innerText = rangeM.values[0][0] || "-";
             document.getElementById("val-kit").innerText = rangeO.values[0][0] || "-";
             
-            // Odblokowanie przycisków Start / Stop
-            document.getElementById("btn-start").disabled = false;
-            document.getElementById("btn-stop").disabled = false;
+            // Ustaw domyślną wartość Rzeczywistych Warstw z kolumny M
+            document.getElementById("in-real-layers").value = rangeM.values[0][0] || "";
             
-            setStatus(`Pobrano dane z wiersza ${currentRowIndex + 1}.`);
+            // Pokaż sekcję z pobranymi danymi
+            document.getElementById("data-section").classList.remove("hidden");
+            
+            setStatus(`Pobrano wiersz ${currentRowIndex + 1}.`);
         });
     } catch (error) {
         console.error(error);
-        setStatus("Błąd pobierania: " + error.message);
+        setStatus("Błąd: " + error.message);
     }
 }
 
 async function writeStartTime() {
-    if (currentRowIndex === -1) {
-        setStatus("Najpierw pobierz dane!");
-        return;
-    }
+    if (currentRowIndex === -1) return;
+    
+    const operator = document.getElementById("in-operator").value;
+    const workers = document.getElementById("in-workers").value;
+    const realLayers = document.getElementById("in-real-layers").value;
+    
     try {
-        setStatus("Zapisywanie Start...");
+        setStatus("Rozpoczynanie...");
         await Excel.run(async (context) => {
             const sheet = context.workbook.worksheets.getActiveWorksheet();
-            // Kolumna AA to indeks 26
-            const rangeAA = sheet.getCell(currentRowIndex, 26);
             
-            const now = new Date();
-            const dateStr = now.toLocaleDateString() + " " + now.toLocaleTimeString();
+            // Zapis: Y(24)=Operator, Z(25)=Pracownicy, BP(67)=Rzecz.Warstwy, AA(26)=Start Czas
+            sheet.getCell(currentRowIndex, 24).values = [[operator]];
+            sheet.getCell(currentRowIndex, 25).values = [[workers]];
+            sheet.getCell(currentRowIndex, 67).values = [[realLayers]];
+            sheet.getCell(currentRowIndex, 26).values = [[getFormattedDate()]];
             
-            rangeAA.values = [[dateStr]];
             await context.sync();
             
-            setStatus(`Start zapisano w wierszu ${currentRowIndex + 1} (AA).`);
+            // Przejście widoku do stopera
+            document.getElementById("btn-fetch").classList.add("hidden");
+            document.getElementById("data-section").classList.add("hidden");
+            document.getElementById("running-section").classList.remove("hidden");
+            
+            startTimer();
+            setStatus("W trakcie pracy...");
         });
     } catch (error) {
         console.error(error);
-        setStatus("Błąd zapisu Start: " + error.message);
+        setStatus("Błąd Start: " + error.message);
     }
 }
 
-async function writeStopTime() {
-    if (currentRowIndex === -1) {
-        setStatus("Najpierw pobierz dane!");
-        return;
-    }
+function startTimer() {
+    secondsElapsed = 0;
+    updateTimerDisplay();
+    timerInterval = setInterval(() => {
+        secondsElapsed++;
+        updateTimerDisplay();
+    }, 1000);
+}
+
+function updateTimerDisplay() {
+    const hrs = Math.floor(secondsElapsed / 3600).toString().padStart(2, '0');
+    const mins = Math.floor((secondsElapsed % 3600) / 60).toString().padStart(2, '0');
+    const secs = (secondsElapsed % 60).toString().padStart(2, '0');
+    document.getElementById("timer").innerText = `${hrs}:${mins}:${secs}`;
+}
+
+async function handleStop() {
+    clearInterval(timerInterval);
     try {
-        setStatus("Zapisywanie Stop...");
+        setStatus("Zatrzymano. Zapis czasu...");
         await Excel.run(async (context) => {
             const sheet = context.workbook.worksheets.getActiveWorksheet();
-            // Kolumna AB to indeks 27
-            const rangeAB = sheet.getCell(currentRowIndex, 27);
-            
-            const now = new Date();
-            const dateStr = now.toLocaleDateString() + " " + now.toLocaleTimeString();
-            
-            rangeAB.values = [[dateStr]];
+            // Zapisz czas stopu do kolumny AB(27)
+            sheet.getCell(currentRowIndex, 27).values = [[getFormattedDate()]];
             await context.sync();
             
-            setStatus(`Stop zapisano w wierszu ${currentRowIndex + 1} (AB).`);
+            // Przejście widoku do incydentów
+            document.getElementById("running-section").classList.add("hidden");
+            document.getElementById("incidents-section").classList.remove("hidden");
+            
+            setStatus("Czas zapisany. Uzupełnij incydenty.");
         });
     } catch (error) {
         console.error(error);
-        setStatus("Błąd zapisu Stop: " + error.message);
+        setStatus("Błąd Stop: " + error.message);
     }
 }
 
-function setStatus(message) {
-    document.getElementById("status-message").innerText = message;
+async function saveIncidents() {
+    const material = document.getElementById("chk-material").checked;
+    const breakTime = document.getElementById("chk-break").checked;
+    const breakdown = document.getElementById("chk-breakdown").checked;
+    const incidentsText = document.getElementById("in-other-incidents").value;
+    
+    try {
+        setStatus("Zapisywanie incydentów...");
+        await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getActiveWorksheet();
+            
+            // BQ(68)=Materiał, BR(69)=Przerwa, BS(70)=Awaria, AK(36)=Inne
+            if (material) sheet.getCell(currentRowIndex, 68).values = [["TAK"]];
+            if (breakTime) sheet.getCell(currentRowIndex, 69).values = [["TAK"]];
+            if (breakdown) sheet.getCell(currentRowIndex, 70).values = [["TAK"]];
+            if (incidentsText.trim() !== "") sheet.getCell(currentRowIndex, 36).values = [[incidentsText]];
+            
+            await context.sync();
+            
+            // Reset interfejsu
+            document.getElementById("incidents-section").classList.add("hidden");
+            document.getElementById("btn-fetch").classList.remove("hidden");
+            
+            // Wyczyść checkboxy i tekst
+            document.getElementById("chk-material").checked = false;
+            document.getElementById("chk-break").checked = false;
+            document.getElementById("chk-breakdown").checked = false;
+            document.getElementById("in-other-incidents").value = "";
+            document.getElementById("in-operator").value = "";
+            
+            setStatus("Zapisano pomyślnie. Zaznacz nowy wiersz.");
+        });
+    } catch (error) {
+        console.error(error);
+        setStatus("Błąd zapisu: " + error.message);
+    }
 }
