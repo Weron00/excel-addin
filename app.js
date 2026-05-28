@@ -180,3 +180,10 @@ async function saveIncidents() {
         setStatus("Błąd zapisu: " + error.message);
     }
 }
+
+function setStatus(message) {
+    const statusEl = document.getElementById("status-message");
+    if (statusEl) {
+        statusEl.innerText = message;
+    }
+}
