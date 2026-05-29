@@ -8,15 +8,28 @@ Office.onReady((info) => {
     document.getElementById("btn-save-full").onclick = () => saveIncidents(true);
     
     if (info.host === Office.HostType.Excel) {
-        setStatus("Ładowanie listy niezakończonych...");
-        scanForUnfinished();
+        setStatus("Mapowanie kolumn...");
+        Excel.run(async (context) => {
+            try {
+                await initializeColumnMap(context);
+                setStatus("Skanowanie listy niezakończonych...");
+                await scanForUnfinished(context);
+            } catch (e) {
+                console.error(e);
+                setStatus("Błąd: " + e.message);
+            }
+        });
     } else {
         setStatus("UWAGA: Uruchom ten link jako Dodatek Wewnątrz Excela!");
     }
 });
 
+let colMap = {};
+let dataStartRowIndex = -1;
+
 let currentRowIndex = -1;
 let timerInterval = null;
+let autoSaveInterval = null;
 let secondsElapsed = 0;
 let isContinuing = false;
 let currentIntervalStartCol = -1;
@@ -34,49 +47,99 @@ function getFormattedDate() {
     return `${datePart} ${hours}:${minutes}:${seconds} ${ampm}`;
 }
 
-async function scanForUnfinished() {
-    try {
-        await Excel.run(async (context) => {
-            const sheet = context.workbook.worksheets.getActiveWorksheet();
-            const range = sheet.getRange("A1:AB1000"); // Skanujemy do wiersza 1000
-            range.load("values");
-            await context.sync();
-            
-            const listContainer = document.getElementById("unfinished-list");
-            listContainer.innerHTML = "";
-            let foundAny = false;
-            
-            for (let i = 1; i < range.values.length; i++) { // Pomijamy nagłówek (0)
-                const row = range.values[i];
-                if (!row) continue;
-                
-                const valAA = row[26] ? row[26].toString().trim() : "";
-                const valAB = row[27] ? row[27].toString().trim() : "";
-                
-                if (valAA !== "" && valAB === "") {
-                    // Niezakończony proces!
-                    foundAny = true;
-                    const itemValue = row[1] ? row[1].toString() : "Brak Itemu"; // B(1)
-                    
-                    const btn = document.createElement("button");
-                    btn.className = "unfinished-item";
-                    btn.innerText = `Wiersz ${i + 1} | Item: ${itemValue}`;
-                    btn.onclick = () => fetchRowData(i, true);
-                    listContainer.appendChild(btn);
-                }
-            }
-            
-            if (!foundAny) {
-                listContainer.innerHTML = `<div style="font-size:12px; color:#9ca3af;">Brak niezakończonych zadań w tym arkuszu.</div>`;
-            }
-            
-            document.getElementById("unfinished-container").style.display = "block";
-            setStatus("Gotowe. Zaznacz wiersz lub wybierz z listy.");
-        });
-    } catch (error) {
-        console.error(error);
-        setStatus("Błąd skanowania: " + error.message);
+async function initializeColumnMap(context) {
+    const sheet = context.workbook.worksheets.getActiveWorksheet();
+    // Pobieranie pierwszych 10 wierszy i dużej liczby kolumn (do 150)
+    const range = sheet.getRange("A1:EU10"); 
+    range.load("values");
+    await context.sync();
+    
+    colMap = {};
+    let itemRow = -1;
+    let startDayRow = -1;
+
+    for (let r = 0; r < 10; r++) {
+        const row = range.values[r];
+        if (!row) continue;
+        for (let c = 0; c < row.length; c++) {
+            const val = row[c] ? row[c].toString().trim() : "";
+            if (!val) continue;
+
+            const valUpper = val.toUpperCase();
+
+            if (valUpper === "ITEM PRODUKTU") { colMap.item = c; itemRow = r; }
+            else if (valUpper === "REWIZJA") { colMap.rev = c; }
+            else if (valUpper === "NAZWA PRODUKTU") { colMap.product = c; }
+            else if (valUpper === "NAZWA NESTINGU") { colMap.nesting = c; }
+            else if (valUpper === "LICZBA KITÓW/WARSTWA") { colMap.expLayers = c; }
+            else if (valUpper === "KITY DO ZROBIENIA") { colMap.kits = c; }
+            else if (valUpper === "OPERATOR") { colMap.operator = c; }
+            else if (valUpper === "ILOŚĆ PRACOWNIKÓW") { colMap.workers = c; }
+            else if (val.includes("Start (Day")) { colMap.startGlobal = c; startDayRow = r; }
+            else if (val.includes("End (Day")) { colMap.endGlobal = c; }
+            else if (valUpper === "NOTES") { colMap.notes = c; }
+            else if (valUpper === "ZMIANA MATERIAŁU?") { colMap.chkMat = c; }
+            else if (valUpper === "PRZERWA?") { colMap.chkBreak = c; }
+            else if (valUpper === "AWARIA?") { colMap.chkBreakdown = c; }
+            else if (valUpper === "MASZYNA") { colMap.machine = c; }
+            else if (valUpper === "PRZEDZIAŁ 1 START") { colMap.int1S = c; }
+            else if (valUpper === "PRZEDZIAŁ 1 END") { colMap.int1E = c; }
+            else if (valUpper === "PRZEDZIAŁ 2 START") { colMap.int2S = c; }
+            else if (valUpper === "PRZEDZIAŁ 2 END") { colMap.int2E = c; }
+            else if (valUpper === "PRZEDZIAŁ 3 START") { colMap.int3S = c; }
+            else if (valUpper === "PRZEDZIAŁ 3 END") { colMap.int3E = c; }
+            else if (valUpper === "PRZEDZIAŁ KOMENTARZ") { colMap.intComment = c; }
+        }
     }
+
+    if (itemRow === -1 || startDayRow === -1) {
+        throw new Error("Nie znaleziono komórek 'ITEM PRODUKTU' lub 'Start (Day...' w 10 pierwszych wierszach.");
+    }
+    
+    // Wiersze podane przez użytkownika to 0-index. Znajdujemy ten niższy.
+    dataStartRowIndex = Math.max(itemRow, startDayRow) + 1;
+}
+
+async function scanForUnfinished(context) {
+    const sheet = context.workbook.worksheets.getActiveWorksheet();
+    // Szukamy do 1000 wierszy od startu danych, wyciągamy tylko kolumny StartGlobal i EndGlobal oraz Item
+    // Ponieważ kolumny są rozrzucone, najlepiej pobrać szeroki zakres. Ograniczymy do 2000 wierszy.
+    const range = sheet.getRangeByIndexes(dataStartRowIndex, 0, 2000, 150);
+    range.load("values");
+    await context.sync();
+    
+    const listContainer = document.getElementById("unfinished-list");
+    listContainer.innerHTML = "";
+    let foundAny = false;
+    
+    for (let i = 0; i < range.values.length; i++) {
+        const row = range.values[i];
+        if (!row) continue;
+        
+        // Pomijamy całkiem puste wiersze (optymalizacja)
+        if (!row[colMap.startGlobal] && !row[colMap.item]) continue;
+        
+        const valAA = row[colMap.startGlobal] ? row[colMap.startGlobal].toString().trim() : "";
+        const valAB = row[colMap.endGlobal] ? row[colMap.endGlobal].toString().trim() : "";
+        
+        if (valAA !== "" && valAB === "") {
+            foundAny = true;
+            const itemValue = (colMap.item !== undefined && row[colMap.item]) ? row[colMap.item].toString() : "Brak Itemu";
+            
+            const btn = document.createElement("button");
+            btn.className = "unfinished-item";
+            btn.innerText = `Wiersz ${dataStartRowIndex + i + 1} | Item: ${itemValue}`;
+            btn.onclick = () => fetchRowData(dataStartRowIndex + i, true);
+            listContainer.appendChild(btn);
+        }
+    }
+    
+    if (!foundAny) {
+        listContainer.innerHTML = `<div style="font-size:12px; color:#9ca3af;">Brak niezakończonych zadań.</div>`;
+    }
+    
+    document.getElementById("unfinished-container").style.display = "block";
+    setStatus("Gotowe. Zaznacz wiersz lub wybierz z listy.");
 }
 
 async function fetchRowData(forcedRowIndex, isCont) {
@@ -91,9 +154,14 @@ async function fetchRowData(forcedRowIndex, isCont) {
                 await context.sync();
                 rowIdx = activeCell.rowIndex;
                 
-                // Sprawdź czy to nowy proces czy kontynuacja (żeby nie pozwolić na zepsucie danych)
-                const checkAA = context.workbook.worksheets.getActiveWorksheet().getCell(rowIdx, 26).load("values");
-                const checkAB = context.workbook.worksheets.getActiveWorksheet().getCell(rowIdx, 27).load("values");
+                if (rowIdx < dataStartRowIndex) {
+                    setStatus("Wybrano wiersz nagłówkowy. Wybierz wiersz poniżej tytułów.");
+                    return;
+                }
+                
+                // Sprawdzanie stanu
+                const checkAA = context.workbook.worksheets.getActiveWorksheet().getCell(rowIdx, colMap.startGlobal).load("values");
+                const checkAB = context.workbook.worksheets.getActiveWorksheet().getCell(rowIdx, colMap.endGlobal).load("values");
                 await context.sync();
                 
                 const valAA = checkAA.values[0][0] ? checkAA.values[0][0].toString().trim() : "";
@@ -104,31 +172,29 @@ async function fetchRowData(forcedRowIndex, isCont) {
                     return;
                 }
                 if (valAA !== "") {
-                    isContinuing = true; // Auto-wykrycie kontynuacji
+                    isContinuing = true;
                 }
             }
             
             currentRowIndex = rowIdx;
             const sheet = context.workbook.worksheets.getActiveWorksheet();
             
-            // Pobieramy szerszy zakres dla danego wiersza, od A do CC (index 0 do 80)
-            const rowRange = sheet.getRangeByIndexes(currentRowIndex, 0, 1, 81).load("values");
+            const rowRange = sheet.getRangeByIndexes(currentRowIndex, 0, 1, 150).load("values");
             await context.sync();
             const vals = rowRange.values[0];
             
-            // B(1), C(2), D(3), E(4), M(12), O(14)
-            document.getElementById("val-item").innerText = vals[1] || "-";
-            document.getElementById("val-rev").innerText = vals[2] || "-";
-            document.getElementById("val-product").innerText = vals[3] || "-";
-            document.getElementById("val-nesting").innerText = vals[4] || "-";
-            document.getElementById("val-warstwy").innerText = vals[12] || "-";
-            document.getElementById("val-kit").innerText = vals[14] || "-";
+            // Odczyt po zmapowanych kolumnach
+            document.getElementById("val-item").innerText = (colMap.item !== undefined && vals[colMap.item]) ? vals[colMap.item] : "-";
+            document.getElementById("val-rev").innerText = (colMap.rev !== undefined && vals[colMap.rev]) ? vals[colMap.rev] : "-";
+            document.getElementById("val-product").innerText = (colMap.product !== undefined && vals[colMap.product]) ? vals[colMap.product] : "-";
+            document.getElementById("val-nesting").innerText = (colMap.nesting !== undefined && vals[colMap.nesting]) ? vals[colMap.nesting] : "-";
+            document.getElementById("val-warstwy").innerText = (colMap.expLayers !== undefined && vals[colMap.expLayers]) ? vals[colMap.expLayers] : "-";
+            document.getElementById("val-kit").innerText = (colMap.kits !== undefined && vals[colMap.kits]) ? vals[colMap.kits] : "-";
             
-            document.getElementById("in-real-layers").value = vals[12] || "";
+            document.getElementById("in-real-layers").value = (colMap.expLayers !== undefined && vals[colMap.expLayers]) ? vals[colMap.expLayers] : "";
             document.getElementById("in-operator").value = "";
             document.getElementById("in-workers").value = "4";
             
-            // Wyczyść incydenty
             document.getElementById("chk-material").checked = false;
             document.getElementById("chk-break").checked = false;
             document.getElementById("chk-breakdown").checked = false;
@@ -136,20 +202,19 @@ async function fetchRowData(forcedRowIndex, isCont) {
             
             if (isContinuing) {
                 document.getElementById("btn-to-machine").innerText = "KONTYNUUJ PROCES";
-                // Załaduj stare dane do podglądu (Y, Z, BP, incydenty)
-                if (vals[24]) document.getElementById("in-operator").value = vals[24];
-                if (vals[25]) document.getElementById("in-workers").value = vals[25];
-                if (vals[67]) document.getElementById("in-real-layers").value = vals[67];
+                // Brak Rzeczywistej Liczby Warstw podanej jako dynamiczna nazwa? "BP" nie ma nagłówka u usera z pliku part 4. 
+                // Ah, użytkownik nie pisał nagłówka dla rzeczywistych warstw. Spróbujmy w operatorze/itp
+                if (colMap.operator !== undefined && vals[colMap.operator]) document.getElementById("in-operator").value = vals[colMap.operator];
+                if (colMap.workers !== undefined && vals[colMap.workers]) document.getElementById("in-workers").value = vals[colMap.workers];
                 
-                if (vals[68] === "TAK") document.getElementById("chk-material").checked = true;
-                if (vals[69] === "TAK") document.getElementById("chk-break").checked = true;
-                if (vals[70] === "TAK") document.getElementById("chk-breakdown").checked = true;
-                if (vals[36]) document.getElementById("in-other-incidents").value = vals[36];
+                if (colMap.chkMat !== undefined && vals[colMap.chkMat] === "TAK") document.getElementById("chk-material").checked = true;
+                if (colMap.chkBreak !== undefined && vals[colMap.chkBreak] === "TAK") document.getElementById("chk-break").checked = true;
+                if (colMap.chkBreakdown !== undefined && vals[colMap.chkBreakdown] === "TAK") document.getElementById("chk-breakdown").checked = true;
+                if (colMap.notes !== undefined && vals[colMap.notes]) document.getElementById("in-other-incidents").value = vals[colMap.notes];
             } else {
                 document.getElementById("btn-to-machine").innerText = "DALEJ";
             }
             
-            // Zmiana widoku
             document.getElementById("initial-card").classList.add("hidden");
             document.getElementById("data-card").classList.remove("hidden");
             
@@ -197,6 +262,8 @@ async function showMachineSelection() {
 async function writeStartTime() {
     const operator = document.getElementById("in-operator").value;
     const workers = document.getElementById("in-workers").value;
+    // Nie mamy "Rzeczywiste Warstwy" w spisie z pkt 4, więc nie ma nagłówka. Użyjemy domyślnie BP (67) lub po prostu pominiemy
+    // jeśli nie ma colMap, ale zapiszemy do 67 awaryjnie.
     const realLayers = document.getElementById("in-real-layers").value;
     const machine = document.getElementById("sel-machine").value;
     
@@ -207,54 +274,55 @@ async function writeStartTime() {
             const dateStr = getFormattedDate();
             
             if (!isContinuing) {
-                // Zapisz dane tylko na starcie globalnym
-                sheet.getCell(currentRowIndex, 24).values = [[operator]];
-                sheet.getCell(currentRowIndex, 25).values = [[workers]];
-                sheet.getCell(currentRowIndex, 67).values = [[realLayers]];
-                sheet.getCell(currentRowIndex, 26).values = [[dateStr]]; // Global Start (AA)
+                if (colMap.operator !== undefined) sheet.getCell(currentRowIndex, colMap.operator).values = [[operator]];
+                if (colMap.workers !== undefined) sheet.getCell(currentRowIndex, colMap.workers).values = [[workers]];
+                sheet.getCell(currentRowIndex, 67).values = [[realLayers]]; // Fallback dla warstw jeśli brak definicji kolumny
+                if (colMap.startGlobal !== undefined) sheet.getCell(currentRowIndex, colMap.startGlobal).values = [[dateStr]];
             }
             
-            // Zawsze zapisz wybraną maszynę
-            sheet.getCell(currentRowIndex, 71).values = [[machine]]; // BT
+            if (colMap.machine !== undefined) sheet.getCell(currentRowIndex, colMap.machine).values = [[machine]];
             
-            // Szukanie wolnego przedziału
-            // BW(74), BX(75) | BY(76), BZ(77) | CA(78), CB(79)
-            const intervalsRange = sheet.getRangeByIndexes(currentRowIndex, 74, 1, 5).load("values");
+            // Logika przedziałów z mapy kolumn
+            const colsToLoad = [];
+            if (colMap.int1S !== undefined) colsToLoad.push(sheet.getCell(currentRowIndex, colMap.int1S).load("values"));
+            if (colMap.int2S !== undefined) colsToLoad.push(sheet.getCell(currentRowIndex, colMap.int2S).load("values"));
+            if (colMap.int3S !== undefined) colsToLoad.push(sheet.getCell(currentRowIndex, colMap.int3S).load("values"));
+            
             await context.sync();
             
-            const iv = intervalsRange.values[0];
-            const vBW = iv[0] ? iv[0].toString().trim() : "";
-            const vBY = iv[2] ? iv[2].toString().trim() : "";
-            const vCA = iv[4] ? iv[4].toString().trim() : "";
+            const v1 = (colsToLoad.length > 0 && colsToLoad[0].values[0][0]) ? colsToLoad[0].values[0][0].toString().trim() : "";
+            const v2 = (colsToLoad.length > 1 && colsToLoad[1].values[0][0]) ? colsToLoad[1].values[0][0].toString().trim() : "";
+            const v3 = (colsToLoad.length > 2 && colsToLoad[2].values[0][0]) ? colsToLoad[2].values[0][0].toString().trim() : "";
             
-            if (vBW === "") {
-                currentIntervalStartCol = 74; currentIntervalEndCol = 75;
-            } else if (vBY === "") {
-                currentIntervalStartCol = 76; currentIntervalEndCol = 77;
-            } else if (vCA === "") {
-                currentIntervalStartCol = 78; currentIntervalEndCol = 79;
+            if (v1 === "" && colMap.int1S !== undefined) {
+                currentIntervalStartCol = colMap.int1S; currentIntervalEndCol = colMap.int1E;
+            } else if (v2 === "" && colMap.int2S !== undefined) {
+                currentIntervalStartCol = colMap.int2S; currentIntervalEndCol = colMap.int2E;
+            } else if (v3 === "" && colMap.int3S !== undefined) {
+                currentIntervalStartCol = colMap.int3S; currentIntervalEndCol = colMap.int3E;
             } else {
-                // Nadpisuje trzeci i dodaje notatkę w CC (80)
-                currentIntervalStartCol = 78; currentIntervalEndCol = 79;
-                sheet.getCell(currentRowIndex, 80).values = [["Proces wznawiano więcej niż 3 razy"]];
+                currentIntervalStartCol = colMap.int3S; currentIntervalEndCol = colMap.int3E;
+                if (colMap.intComment !== undefined) {
+                    sheet.getCell(currentRowIndex, colMap.intComment).values = [["Proces wznawiano więcej niż 3 razy"]];
+                }
             }
             
-            // Wpisanie czasu Start do przedziału
-            sheet.getCell(currentRowIndex, currentIntervalStartCol).values = [[dateStr]];
-            await context.sync();
+            if (currentIntervalStartCol !== undefined && currentIntervalStartCol !== -1) {
+                sheet.getCell(currentRowIndex, currentIntervalStartCol).values = [[dateStr]];
+                await context.sync();
+            }
             
-            // Ustaw tekst info
             const iTxt = document.getElementById("val-item").innerText;
             const rTxt = document.getElementById("val-rev").innerText;
             const pTxt = document.getElementById("val-product").innerText;
             const nTxt = document.getElementById("val-nesting").innerText;
             document.getElementById("running-info").innerHTML = `Item: ${iTxt}, Rev: ${rTxt}<br>Prod: ${pTxt}<br>Nesting: ${nTxt}`;
             
-            // Przejście widoku do stopera
             document.getElementById("machine-card").classList.add("hidden");
             document.getElementById("running-card").classList.remove("hidden");
             
             startTimer();
+            startAutoSave();
             setStatus("W trakcie pracy...");
         });
     } catch (error) {
@@ -279,8 +347,34 @@ function updateTimerDisplay() {
     document.getElementById("timer").innerText = `${hrs}:${mins}:${secs}`;
 }
 
+function startAutoSave() {
+    // Autozapis co 30 sekund na wypadek zamknięcia excela "iksem"
+    autoSaveInterval = setInterval(async () => {
+        if (currentRowIndex !== -1 && currentIntervalEndCol !== -1 && currentIntervalEndCol !== undefined) {
+            try {
+                await Excel.run(async (ctx) => {
+                    const sheet = ctx.workbook.worksheets.getActiveWorksheet();
+                    sheet.getCell(currentRowIndex, currentIntervalEndCol).values = [[getFormattedDate()]];
+                    await ctx.sync();
+                });
+            } catch (e) {
+                console.warn("Autozapis w tle:", e);
+            }
+        }
+    }, 30000);
+}
+
+function stopAutoSave() {
+    if (autoSaveInterval) {
+        clearInterval(autoSaveInterval);
+        autoSaveInterval = null;
+    }
+}
+
 function handleStop() {
     clearInterval(timerInterval);
+    stopAutoSave(); // Zatrzymujemy autozapis by użytkownik mógł samodzielnie wysłać końcowe dane
+    
     document.getElementById("running-card").classList.add("hidden");
     document.getElementById("incidents-card").classList.remove("hidden");
     setStatus("Czas zatrzymany. Wybierz opcję zakończenia.");
@@ -298,33 +392,23 @@ async function saveIncidents(fullComplete) {
             const sheet = context.workbook.worksheets.getActiveWorksheet();
             const dateStr = getFormattedDate();
             
-            // Zapisz do aktualnego przedziału
-            if (currentIntervalEndCol !== -1) {
+            if (currentIntervalEndCol !== -1 && currentIntervalEndCol !== undefined) {
                 sheet.getCell(currentRowIndex, currentIntervalEndCol).values = [[dateStr]];
             }
             
-            // Jeżeli kończymy całkowicie
-            if (fullComplete) {
-                sheet.getCell(currentRowIndex, 27).values = [[dateStr]]; // AB Global End
+            if (fullComplete && colMap.endGlobal !== undefined) {
+                sheet.getCell(currentRowIndex, colMap.endGlobal).values = [[dateStr]];
             }
             
-            // BQ(68)=Materiał, BR(69)=Przerwa, BS(70)=Awaria, AK(36)=Inne
-            // Jeśli puste, nie nadpisujemy "TAK", tylko sprawdzamy co jest
-            if (material) sheet.getCell(currentRowIndex, 68).values = [["TAK"]];
-            else sheet.getCell(currentRowIndex, 68).values = [[""]];
-            
-            if (breakTime) sheet.getCell(currentRowIndex, 69).values = [["TAK"]];
-            else sheet.getCell(currentRowIndex, 69).values = [[""]];
-            
-            if (breakdown) sheet.getCell(currentRowIndex, 70).values = [["TAK"]];
-            else sheet.getCell(currentRowIndex, 70).values = [[""]];
-            
-            sheet.getCell(currentRowIndex, 36).values = [[incidentsText]];
+            if (colMap.chkMat !== undefined) sheet.getCell(currentRowIndex, colMap.chkMat).values = [[material ? "TAK" : ""]];
+            if (colMap.chkBreak !== undefined) sheet.getCell(currentRowIndex, colMap.chkBreak).values = [[breakTime ? "TAK" : ""]];
+            if (colMap.chkBreakdown !== undefined) sheet.getCell(currentRowIndex, colMap.chkBreakdown).values = [[breakdown ? "TAK" : ""]];
+            if (colMap.notes !== undefined) sheet.getCell(currentRowIndex, colMap.notes).values = [[incidentsText]];
             
             await context.sync();
             
             resetUI();
-            scanForUnfinished(); // Odśwież listę
+            Excel.run(async (ctx) => { await scanForUnfinished(ctx); });
             setStatus(fullComplete ? "Zakończono produkt pomyślnie!" : "Przerwano produkt. Zapisano zmianę.");
         });
     } catch (error) {
@@ -335,6 +419,7 @@ async function saveIncidents(fullComplete) {
 
 function resetUI() {
     clearInterval(timerInterval);
+    stopAutoSave();
     document.getElementById("data-card").classList.add("hidden");
     document.getElementById("machine-card").classList.add("hidden");
     document.getElementById("running-card").classList.add("hidden");
