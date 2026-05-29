@@ -8,9 +8,12 @@ Office.onReady((info) => {
     document.getElementById("btn-save-full").onclick = () => saveIncidents(true);
     
     if (info.host === Office.HostType.Excel) {
-        setStatus("Mapowanie kolumn...");
+        setStatus("Inicjalizacja...");
         Excel.run(async (context) => {
             try {
+                // Podpinamy nasłuchiwanie zmiany zakładki!
+                context.workbook.worksheets.onActivated.add(onWorksheetActivated);
+                
                 await initializeColumnMap(context);
                 setStatus("Skanowanie listy niezakończonych...");
                 await scanForUnfinished(context);
@@ -28,6 +31,7 @@ let colMap = {};
 let dataStartRowIndex = -1;
 
 let currentRowIndex = -1;
+let activeSheetName = ""; // Zmienna przechowująca zakładkę, na której rozpoczęto pracę
 let timerInterval = null;
 let autoSaveInterval = null;
 let secondsElapsed = 0;
@@ -47,9 +51,37 @@ function getFormattedDate() {
     return `${datePart} ${hours}:${minutes}:${seconds} ${ampm}`;
 }
 
+async function onWorksheetActivated(event) {
+    if (timerInterval !== null) {
+        // Jeśli leci czas, ignorujemy zmianę zakładki, żeby nie zepsuć interfejsu 
+        // (zapisy i tak polecą do poprawnego arkusza dzięki zmiennej activeSheetName)
+        return;
+    }
+    
+    // Jeśli czasu nie ma, resetujemy widok i mapujemy nową zakładkę
+    clearInterval(timerInterval);
+    stopAutoSave();
+    document.getElementById("data-card").classList.add("hidden");
+    document.getElementById("machine-card").classList.add("hidden");
+    document.getElementById("running-card").classList.add("hidden");
+    document.getElementById("incidents-card").classList.add("hidden");
+    document.getElementById("initial-card").classList.remove("hidden");
+    
+    setStatus("Zmieniono zakładkę. Remapowanie kolumn...");
+    try {
+        await Excel.run(async (context) => {
+            await initializeColumnMap(context);
+            await scanForUnfinished(context);
+        });
+    } catch (error) {
+        console.error(error);
+        setStatus("Błąd zmiany zakładki: " + error.message);
+    }
+}
+
 async function initializeColumnMap(context) {
     const sheet = context.workbook.worksheets.getActiveWorksheet();
-    // Pobieranie pierwszych 10 wierszy i dużej liczby kolumn (do 150)
+    // Pobieranie pierwszych 10 wierszy i dużej liczby kolumn
     const range = sheet.getRange("A1:EU10"); 
     range.load("values");
     await context.sync();
@@ -93,17 +125,15 @@ async function initializeColumnMap(context) {
     }
 
     if (itemRow === -1 || startDayRow === -1) {
-        throw new Error("Nie znaleziono komórek 'ITEM PRODUKTU' lub 'Start (Day...' w 10 pierwszych wierszach.");
+        throw new Error("W pierwszych 10 wierszach nie ma komórki 'ITEM PRODUKTU' lub 'Start (Day...'. Nakładka zablokowana.");
     }
     
-    // Wiersze podane przez użytkownika to 0-index. Znajdujemy ten niższy.
     dataStartRowIndex = Math.max(itemRow, startDayRow) + 1;
 }
 
 async function scanForUnfinished(context) {
     const sheet = context.workbook.worksheets.getActiveWorksheet();
-    // Szukamy do 1000 wierszy od startu danych, wyciągamy tylko kolumny StartGlobal i EndGlobal oraz Item
-    // Ponieważ kolumny są rozrzucone, najlepiej pobrać szeroki zakres. Ograniczymy do 2000 wierszy.
+    // Nakładka szuka produktów na konkretnym arkuszu, w którym aktualnie jesteś
     const range = sheet.getRangeByIndexes(dataStartRowIndex, 0, 2000, 150);
     range.load("values");
     await context.sync();
@@ -116,7 +146,6 @@ async function scanForUnfinished(context) {
         const row = range.values[i];
         if (!row) continue;
         
-        // Pomijamy całkiem puste wiersze (optymalizacja)
         if (!row[colMap.startGlobal] && !row[colMap.item]) continue;
         
         const valAA = row[colMap.startGlobal] ? row[colMap.startGlobal].toString().trim() : "";
@@ -135,7 +164,7 @@ async function scanForUnfinished(context) {
     }
     
     if (!foundAny) {
-        listContainer.innerHTML = `<div style="font-size:12px; color:#9ca3af;">Brak niezakończonych zadań.</div>`;
+        listContainer.innerHTML = `<div style="font-size:12px; color:#9ca3af;">Brak niezakończonych zadań na tej zakładce.</div>`;
     }
     
     document.getElementById("unfinished-container").style.display = "block";
@@ -147,6 +176,11 @@ async function fetchRowData(forcedRowIndex, isCont) {
     try {
         setStatus("Pobieranie danych...");
         await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getActiveWorksheet();
+            sheet.load("name");
+            await context.sync();
+            activeSheetName = sheet.name; // Zapisujemy nazwę arkusza operacyjnego
+            
             let rowIdx = forcedRowIndex;
             if (rowIdx === null) {
                 const activeCell = context.workbook.getActiveCell();
@@ -159,9 +193,8 @@ async function fetchRowData(forcedRowIndex, isCont) {
                     return;
                 }
                 
-                // Sprawdzanie stanu
-                const checkAA = context.workbook.worksheets.getActiveWorksheet().getCell(rowIdx, colMap.startGlobal).load("values");
-                const checkAB = context.workbook.worksheets.getActiveWorksheet().getCell(rowIdx, colMap.endGlobal).load("values");
+                const checkAA = sheet.getCell(rowIdx, colMap.startGlobal).load("values");
+                const checkAB = sheet.getCell(rowIdx, colMap.endGlobal).load("values");
                 await context.sync();
                 
                 const valAA = checkAA.values[0][0] ? checkAA.values[0][0].toString().trim() : "";
@@ -177,13 +210,11 @@ async function fetchRowData(forcedRowIndex, isCont) {
             }
             
             currentRowIndex = rowIdx;
-            const sheet = context.workbook.worksheets.getActiveWorksheet();
             
             const rowRange = sheet.getRangeByIndexes(currentRowIndex, 0, 1, 150).load("values");
             await context.sync();
             const vals = rowRange.values[0];
             
-            // Odczyt po zmapowanych kolumnach
             document.getElementById("val-item").innerText = (colMap.item !== undefined && vals[colMap.item]) ? vals[colMap.item] : "-";
             document.getElementById("val-rev").innerText = (colMap.rev !== undefined && vals[colMap.rev]) ? vals[colMap.rev] : "-";
             document.getElementById("val-product").innerText = (colMap.product !== undefined && vals[colMap.product]) ? vals[colMap.product] : "-";
@@ -202,8 +233,6 @@ async function fetchRowData(forcedRowIndex, isCont) {
             
             if (isContinuing) {
                 document.getElementById("btn-to-machine").innerText = "KONTYNUUJ PROCES";
-                // Brak Rzeczywistej Liczby Warstw podanej jako dynamiczna nazwa? "BP" nie ma nagłówka u usera z pliku part 4. 
-                // Ah, użytkownik nie pisał nagłówka dla rzeczywistych warstw. Spróbujmy w operatorze/itp
                 if (colMap.operator !== undefined && vals[colMap.operator]) document.getElementById("in-operator").value = vals[colMap.operator];
                 if (colMap.workers !== undefined && vals[colMap.workers]) document.getElementById("in-workers").value = vals[colMap.workers];
                 
@@ -243,7 +272,8 @@ async function showMachineSelection() {
                 const opt = document.createElement("option");
                 opt.value = sheet.name;
                 opt.text = sheet.name;
-                if (sheet.name === activeSheet.name) {
+                // Jeśli nazwa operacyjnego arkusza się zgadza to domyślnie wybrana
+                if (sheet.name === activeSheetName) {
                     opt.selected = true;
                 }
                 selMachine.appendChild(opt);
@@ -262,27 +292,25 @@ async function showMachineSelection() {
 async function writeStartTime() {
     const operator = document.getElementById("in-operator").value;
     const workers = document.getElementById("in-workers").value;
-    // Nie mamy "Rzeczywiste Warstwy" w spisie z pkt 4, więc nie ma nagłówka. Użyjemy domyślnie BP (67) lub po prostu pominiemy
-    // jeśli nie ma colMap, ale zapiszemy do 67 awaryjnie.
     const realLayers = document.getElementById("in-real-layers").value;
     const machine = document.getElementById("sel-machine").value;
     
     try {
         setStatus("Rozpoczynanie...");
         await Excel.run(async (context) => {
-            const sheet = context.workbook.worksheets.getActiveWorksheet();
+            // Zapis do bezpiecznego arkusza operacyjnego (odporność na klikanie po zakładkach)
+            const sheet = context.workbook.worksheets.getItem(activeSheetName);
             const dateStr = getFormattedDate();
             
             if (!isContinuing) {
                 if (colMap.operator !== undefined) sheet.getCell(currentRowIndex, colMap.operator).values = [[operator]];
                 if (colMap.workers !== undefined) sheet.getCell(currentRowIndex, colMap.workers).values = [[workers]];
-                sheet.getCell(currentRowIndex, 67).values = [[realLayers]]; // Fallback dla warstw jeśli brak definicji kolumny
+                sheet.getCell(currentRowIndex, 67).values = [[realLayers]]; // Fallback dla warstw jeśli brak definicji
                 if (colMap.startGlobal !== undefined) sheet.getCell(currentRowIndex, colMap.startGlobal).values = [[dateStr]];
             }
             
             if (colMap.machine !== undefined) sheet.getCell(currentRowIndex, colMap.machine).values = [[machine]];
             
-            // Logika przedziałów z mapy kolumn
             const colsToLoad = [];
             if (colMap.int1S !== undefined) colsToLoad.push(sheet.getCell(currentRowIndex, colMap.int1S).load("values"));
             if (colMap.int2S !== undefined) colsToLoad.push(sheet.getCell(currentRowIndex, colMap.int2S).load("values"));
@@ -348,12 +376,11 @@ function updateTimerDisplay() {
 }
 
 function startAutoSave() {
-    // Autozapis co 30 sekund na wypadek zamknięcia excela "iksem"
     autoSaveInterval = setInterval(async () => {
         if (currentRowIndex !== -1 && currentIntervalEndCol !== -1 && currentIntervalEndCol !== undefined) {
             try {
                 await Excel.run(async (ctx) => {
-                    const sheet = ctx.workbook.worksheets.getActiveWorksheet();
+                    const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
                     sheet.getCell(currentRowIndex, currentIntervalEndCol).values = [[getFormattedDate()]];
                     await ctx.sync();
                 });
@@ -373,7 +400,7 @@ function stopAutoSave() {
 
 function handleStop() {
     clearInterval(timerInterval);
-    stopAutoSave(); // Zatrzymujemy autozapis by użytkownik mógł samodzielnie wysłać końcowe dane
+    stopAutoSave(); 
     
     document.getElementById("running-card").classList.add("hidden");
     document.getElementById("incidents-card").classList.remove("hidden");
@@ -389,7 +416,7 @@ async function saveIncidents(fullComplete) {
     try {
         setStatus("Zapisywanie...");
         await Excel.run(async (context) => {
-            const sheet = context.workbook.worksheets.getActiveWorksheet();
+            const sheet = context.workbook.worksheets.getItem(activeSheetName);
             const dateStr = getFormattedDate();
             
             if (currentIntervalEndCol !== -1 && currentIntervalEndCol !== undefined) {
@@ -408,8 +435,12 @@ async function saveIncidents(fullComplete) {
             await context.sync();
             
             resetUI();
-            Excel.run(async (ctx) => { await scanForUnfinished(ctx); });
             setStatus(fullComplete ? "Zakończono produkt pomyślnie!" : "Przerwano produkt. Zapisano zmianę.");
+            
+            // Ponieważ użytkownik mógł zmienić zakładkę podczas trwania procesu,
+            // dla bezpieczeństwa remapujemy kolumny pod obecną zakładkę przed skanem
+            await initializeColumnMap(context);
+            await scanForUnfinished(context);
         });
     } catch (error) {
         console.error(error);
@@ -425,7 +456,6 @@ function resetUI() {
     document.getElementById("running-card").classList.add("hidden");
     document.getElementById("incidents-card").classList.add("hidden");
     document.getElementById("initial-card").classList.remove("hidden");
-    setStatus("Gotowe. Zaznacz wiersz lub wybierz z listy.");
 }
 
 function setStatus(message) {
