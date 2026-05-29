@@ -107,6 +107,7 @@ async function initializeColumnMap(context) {
             else if (valUpper === "KITY DO ZROBIENIA") { colMap.kits = c; }
             else if (valUpper === "OPERATOR") { colMap.operator = c; }
             else if (valUpper === "ILOŚĆ PRACOWNIKÓW") { colMap.workers = c; }
+            else if (valUpper === "RZECZYWISTE WARSTWY") { colMap.realLayers = c; }
             else if (valUpper.includes("START (DAY")) { colMap.startGlobal = c; startDayRow = r; }
             else if (valUpper.includes("END (DAY")) { colMap.endGlobal = c; }
             else if (valUpper === "NOTES") { colMap.notes = c; }
@@ -133,6 +134,7 @@ async function initializeColumnMap(context) {
     if (colMap.kits === undefined) missing.push("KITY DO ZROBIENIA");
     if (colMap.operator === undefined) missing.push("OPERATOR");
     if (colMap.workers === undefined) missing.push("ILOŚĆ PRACOWNIKÓW");
+    if (colMap.realLayers === undefined) missing.push("RZECZYWISTE WARSTWY");
     if (colMap.startGlobal === undefined) missing.push("Start (Day...");
     if (colMap.endGlobal === undefined) missing.push("End (Day...");
     if (colMap.notes === undefined) missing.push("NOTES");
@@ -260,6 +262,7 @@ async function fetchRowData(forcedRowIndex, isCont) {
                 document.getElementById("btn-to-machine").innerText = "KONTYNUUJ PROCES";
                 if (colMap.operator !== undefined && vals[colMap.operator]) document.getElementById("in-operator").value = vals[colMap.operator];
                 if (colMap.workers !== undefined && vals[colMap.workers]) document.getElementById("in-workers").value = vals[colMap.workers];
+                if (colMap.realLayers !== undefined && vals[colMap.realLayers]) document.getElementById("in-real-layers").value = vals[colMap.realLayers];
                 
                 if (colMap.chkMat !== undefined && vals[colMap.chkMat] === "TAK") document.getElementById("chk-material").checked = true;
                 if (colMap.chkBreak !== undefined && vals[colMap.chkBreak] === "TAK") document.getElementById("chk-break").checked = true;
@@ -330,7 +333,7 @@ async function writeStartTime() {
             if (!isContinuing) {
                 if (colMap.operator !== undefined) sheet.getCell(currentRowIndex, colMap.operator).values = [[operator]];
                 if (colMap.workers !== undefined) sheet.getCell(currentRowIndex, colMap.workers).values = [[workers]];
-                sheet.getCell(currentRowIndex, 67).values = [[realLayers]]; // Fallback dla warstw jeśli brak definicji
+                if (colMap.realLayers !== undefined) sheet.getCell(currentRowIndex, colMap.realLayers).values = [[realLayers]];
                 if (colMap.startGlobal !== undefined) sheet.getCell(currentRowIndex, colMap.startGlobal).values = [[dateStr]];
             }
             
