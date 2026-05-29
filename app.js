@@ -107,8 +107,8 @@ async function initializeColumnMap(context) {
             else if (valUpper === "KITY DO ZROBIENIA") { colMap.kits = c; }
             else if (valUpper === "OPERATOR") { colMap.operator = c; }
             else if (valUpper === "ILOŚĆ PRACOWNIKÓW") { colMap.workers = c; }
-            else if (val.includes("Start (Day")) { colMap.startGlobal = c; startDayRow = r; }
-            else if (val.includes("End (Day")) { colMap.endGlobal = c; }
+            else if (valUpper.includes("START (DAY")) { colMap.startGlobal = c; startDayRow = r; }
+            else if (valUpper.includes("END (DAY")) { colMap.endGlobal = c; }
             else if (valUpper === "NOTES") { colMap.notes = c; }
             else if (valUpper === "ZMIANA MATERIAŁU?") { colMap.chkMat = c; }
             else if (valUpper === "PRZERWA?") { colMap.chkBreak = c; }
@@ -124,8 +124,33 @@ async function initializeColumnMap(context) {
         }
     }
 
-    if (itemRow === -1 || startDayRow === -1) {
-        throw new Error("W pierwszych 10 wierszach nie ma komórki 'ITEM PRODUKTU' lub 'Start (Day...'. Nakładka zablokowana.");
+    const missing = [];
+    if (colMap.item === undefined) missing.push("ITEM PRODUKTU");
+    if (colMap.rev === undefined) missing.push("REWIZJA");
+    if (colMap.product === undefined) missing.push("NAZWA PRODUKTU");
+    if (colMap.nesting === undefined) missing.push("NAZWA NESTINGU");
+    if (colMap.expLayers === undefined) missing.push("LICZBA KITÓW/WARSTWA");
+    if (colMap.kits === undefined) missing.push("KITY DO ZROBIENIA");
+    if (colMap.operator === undefined) missing.push("OPERATOR");
+    if (colMap.workers === undefined) missing.push("ILOŚĆ PRACOWNIKÓW");
+    if (colMap.startGlobal === undefined) missing.push("Start (Day...");
+    if (colMap.endGlobal === undefined) missing.push("End (Day...");
+    if (colMap.notes === undefined) missing.push("NOTES");
+    if (colMap.chkMat === undefined) missing.push("ZMIANA MATERIAŁU?");
+    if (colMap.chkBreak === undefined) missing.push("PRZERWA?");
+    if (colMap.chkBreakdown === undefined) missing.push("AWARIA?");
+    if (colMap.machine === undefined) missing.push("MASZYNA");
+    if (colMap.int1S === undefined) missing.push("PRZEDZIAŁ 1 START");
+    if (colMap.int1E === undefined) missing.push("PRZEDZIAŁ 1 END");
+    if (colMap.int2S === undefined) missing.push("PRZEDZIAŁ 2 START");
+    if (colMap.int2E === undefined) missing.push("PRZEDZIAŁ 2 END");
+    if (colMap.int3S === undefined) missing.push("PRZEDZIAŁ 3 START");
+    if (colMap.int3E === undefined) missing.push("PRZEDZIAŁ 3 END");
+    if (colMap.intComment === undefined) missing.push("PRZEDZIAŁ KOMENTARZ");
+
+    if (missing.length > 0) {
+        document.getElementById("unfinished-list").innerHTML = `<div style="color:red; font-size:12px;"><b>Błąd:</b> Brakuje kolumn:<br>${missing.join(", ")}</div>`;
+        throw new Error("Brakuje kolumn w pierwszych 10 wierszach: " + missing.join(", "));
     }
     
     dataStartRowIndex = Math.max(itemRow, startDayRow) + 1;
