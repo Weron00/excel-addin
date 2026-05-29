@@ -3,62 +3,92 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-width=1.0">
-    <title>Nakładka Sekwencji - Część 2</title>
+    <title>Nakładka Sekwencji - Część 3</title>
     <!-- Office JavaScript API -->
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-    <link rel="stylesheet" href="styles.css?v=3">
+    <link rel="stylesheet" href="styles.css?v=4">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="container">
         <header>
             <h1>Panel Sterowania</h1>
-            <p>Zaznacz wiersz i kliknij Pobierz</p>
+            <p>Zaznacz wiersz lub wybierz z listy kontynuacji</p>
         </header>
 
-        <div class="card">
+        <div id="initial-card" class="card">
             <button id="btn-fetch" class="btn-primary">Pobierz Dane z Wiersza</button>
             
-            <div id="data-section" class="hidden">
-                <div class="data-grid">
-                    <div class="data-item"><span class="label">Item (B)</span><span class="value" id="val-item">---</span></div>
-                    <div class="data-item"><span class="label">Rewizja (C)</span><span class="value" id="val-rev">---</span></div>
-                    <div class="data-item"><span class="label">Produkt (D)</span><span class="value" id="val-product">---</span></div>
-                    <div class="data-item"><span class="label">Nesting (E)</span><span class="value" id="val-nesting">---</span></div>
-                    <div class="data-item"><span class="label">Oczek. Warstwy (M)</span><span class="value" id="val-warstwy">---</span></div>
-                    <div class="data-item"><span class="label">Zestawy KIT (O)</span><span class="value" id="val-kit">---</span></div>
-                </div>
-
-                <div id="setup-form" class="form-section">
-                    <div class="input-group">
-                        <label for="in-operator">Inicjały operatora</label>
-                        <input type="text" id="in-operator" placeholder="np. AB">
-                    </div>
-                    <div class="input-group">
-                        <label for="in-workers">Liczba pracowników</label>
-                        <input type="number" id="in-workers" value="4">
-                    </div>
-                    <div class="input-group">
-                        <label for="in-real-layers">Rzeczywista l. warstw</label>
-                        <input type="number" id="in-real-layers" placeholder="Domyślnie z (M)">
-                    </div>
-                </div>
-
-                <div class="actions">
-                    <button id="btn-start" class="btn-action start">START</button>
+            <div id="unfinished-container" style="margin-top: 16px; display: none;">
+                <h4 style="margin: 0 0 8px 0; font-size: 14px; color: #4b5563;">Kontynuuj:</h4>
+                <div id="unfinished-list" class="unfinished-list">
+                    <!-- Dynamiczne przyciski z niezakończonymi zadaniami -->
+                    <div style="font-size:12px; color:#9ca3af;">Skanowanie...</div>
                 </div>
             </div>
         </div>
 
-        <div id="running-section" class="card hidden">
+        <div id="data-card" class="card hidden">
+            <h3 style="margin:0 0 12px 0; font-size:15px;" id="data-header">Dane z wiersza</h3>
+            <div class="data-grid">
+                <div class="data-item"><span class="label">Item (B)</span><span class="value" id="val-item">---</span></div>
+                <div class="data-item"><span class="label">Rewizja (C)</span><span class="value" id="val-rev">---</span></div>
+                <div class="data-item"><span class="label">Produkt (D)</span><span class="value" id="val-product">---</span></div>
+                <div class="data-item"><span class="label">Nesting (E)</span><span class="value" id="val-nesting">---</span></div>
+                <div class="data-item"><span class="label">Oczek. Warstwy (M)</span><span class="value" id="val-warstwy">---</span></div>
+                <div class="data-item"><span class="label">Zestawy KIT (O)</span><span class="value" id="val-kit">---</span></div>
+            </div>
+
+            <div id="setup-form" class="form-section">
+                <div class="input-group">
+                    <label for="in-operator">Inicjały operatora</label>
+                    <input type="text" id="in-operator" placeholder="np. AB">
+                </div>
+                <div class="input-group">
+                    <label for="in-workers">Liczba pracowników</label>
+                    <input type="number" id="in-workers" value="4">
+                </div>
+                <div class="input-group">
+                    <label for="in-real-layers">Rzeczywista l. warstw</label>
+                    <input type="number" id="in-real-layers" placeholder="Domyślnie z (M)">
+                </div>
+            </div>
+
+            <div class="actions">
+                <button id="btn-to-machine" class="btn-action start">DALEJ</button>
+            </div>
+            <button id="btn-cancel-data" class="btn-secondary" style="margin-top:8px;">Anuluj</button>
+        </div>
+
+        <div id="machine-card" class="card hidden">
+            <h3 style="margin:0 0 12px 0; font-size:15px;">Wybierz maszynę</h3>
+            <div class="input-group">
+                <select id="sel-machine">
+                    <option value="">Ładowanie...</option>
+                </select>
+            </div>
+            <div class="actions" style="margin-top: 16px;">
+                <button id="btn-start-timer" class="btn-action start">START CZASU</button>
+            </div>
+        </div>
+
+        <div id="running-card" class="card hidden">
+            <!-- Skrócone info na górze, żeby widział co robi -->
+            <div style="font-size: 11px; color:#6b7280; font-weight:600; text-transform:uppercase; margin-bottom:8px;">Teraz robisz:</div>
+            <div style="font-size: 13px; font-weight:700; color:#111827; margin-bottom:12px; line-height:1.4;" id="running-info">
+                Item: -, Rewizja: -<br>
+                Prod: -<br>
+                Nesting: -
+            </div>
+            
             <div class="timer-display" id="timer">00:00:00</div>
             <div class="actions">
                 <button id="btn-stop" class="btn-action stop">STOP</button>
             </div>
         </div>
 
-        <div id="incidents-section" class="card hidden">
-            <h3>Podsumowanie i Incydenty</h3>
+        <div id="incidents-card" class="card hidden">
+            <h3 style="margin: 0 0 12px 0; font-size: 15px;">Podsumowanie i Incydenty</h3>
             <div class="checkbox-group">
                 <label><input type="checkbox" id="chk-material"> Zmiana materiału</label>
                 <label><input type="checkbox" id="chk-break"> Przerwa w trakcie</label>
@@ -68,12 +98,16 @@
                 <label for="in-other-incidents">Inne incydenty (Opis)</label>
                 <textarea id="in-other-incidents" rows="2" placeholder="Napisz jeśli wystąpiły inne problemy..."></textarea>
             </div>
-            <button id="btn-save" class="btn-primary" style="margin-top:12px;">Zapisz i Zakończ</button>
+            
+            <div class="actions" style="margin-top:16px; flex-direction:column;">
+                <button id="btn-save-partial" class="btn-secondary" style="border:1px solid #d1d5db; color:#374151;">Zakończ na dzisiaj</button>
+                <button id="btn-save-full" class="btn-primary">Zakończ całkowicie Produkt</button>
+            </div>
         </div>
         
-        <div id="status-message" class="status">Czeka na akcję...</div>
+        <div id="status-message" class="status">Ładowanie...</div>
     </div>
 
-    <script src="app.js?v=3"></script>
+    <script src="app.js?v=4"></script>
 </body>
 </html>

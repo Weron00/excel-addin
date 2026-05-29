@@ -97,6 +97,17 @@ button:disabled {
     transform: translateY(0);
 }
 
+.btn-secondary {
+    background-color: transparent;
+    border: 1px solid #d1d5db;
+    color: #374151;
+    width: 100%;
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background-color: #f3f4f6;
+}
+
 .data-grid {
     display: flex;
     flex-direction: column;
@@ -156,7 +167,7 @@ button:disabled {
     color: #374151;
 }
 
-.input-group input, .input-group textarea {
+.input-group input, .input-group textarea, .input-group select {
     font-family: 'Inter', sans-serif;
     padding: 8px 12px;
     border: 1px solid #d1d5db;
@@ -164,9 +175,10 @@ button:disabled {
     font-size: 14px;
     outline: none;
     transition: border-color 0.2s;
+    background: white;
 }
 
-.input-group input:focus, .input-group textarea:focus {
+.input-group input:focus, .input-group textarea:focus, .input-group select:focus {
     border-color: var(--primary-color);
 }
 
@@ -212,11 +224,7 @@ button:disabled {
     padding: 16px;
     border-radius: 8px;
     border: 2px solid #e5e7eb;
-}
-
-#incidents-section h3 {
-    margin: 0 0 8px 0;
-    font-size: 15px;
+    margin-bottom: 8px;
 }
 
 .checkbox-group {
@@ -246,4 +254,29 @@ button:disabled {
     font-size: 12px;
     color: var(--text-muted);
     min-height: 20px;
+}
+
+.unfinished-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.unfinished-item {
+    background: #fef3c7;
+    border: 1px solid #fde68a;
+    color: #92400e;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.2s;
+}
+
+.unfinished-item:hover {
+    background: #fde68a;
 }
