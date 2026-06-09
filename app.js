@@ -483,35 +483,37 @@ function startTimer() {
 function updateTimerDisplay() {
     document.getElementById("timer").innerText = secondsToHms(secondsElapsed);
     
-    let totalNetSeconds = previousTotalGrossSeconds + secondsElapsed - totalAwariaSecondsGlobal - (isAwariaActive ? awariaSecondsElapsed : 0);
-    if (totalNetSeconds < 0) totalNetSeconds = 0;
+    let totalGrossSecondsForTarget = previousTotalGrossSeconds + secondsElapsed;
     
     const targetValue = document.getElementById("target-value");
     const targetDetails = document.getElementById("target-details");
     
-    if (theoreticalSeconds > 0 && totalNetSeconds > 0) {
-        const targetPct = (theoreticalSeconds / totalNetSeconds) * 100;
-        targetValue.innerText = Math.round(targetPct) + " %";
-        
-        if (targetPct >= 100) {
-            targetValue.style.color = "#16a34a"; // green
-        } else if (targetPct >= 80) {
-            targetValue.style.color = "#d97706"; // yellow/orange
+    // Aktualizacja UI targetu tylko co 3 minuty (180s) lub na starcie
+    if (secondsElapsed % 180 === 0 || secondsElapsed === 0 || targetValue.innerText === "START..." || targetValue.innerText === "Brak") {
+        if (theoreticalSeconds > 0 && totalGrossSecondsForTarget > 0) {
+            const targetPct = (theoreticalSeconds / totalGrossSecondsForTarget) * 100;
+            targetValue.innerText = Math.round(targetPct) + " %";
+            
+            if (targetPct >= 100) {
+                targetValue.style.color = "#16a34a"; // green
+            } else if (targetPct >= 80) {
+                targetValue.style.color = "#d97706"; // yellow/orange
+            } else {
+                targetValue.style.color = "#dc2626"; // red
+            }
+        } else if (theoreticalSeconds > 0 && totalGrossSecondsForTarget === 0) {
+            targetValue.innerText = "START...";
+            targetValue.style.color = "#6b7280";
         } else {
-            targetValue.style.color = "#dc2626"; // red
+            targetValue.innerText = "Brak";
+            targetValue.style.color = "#6b7280";
         }
-    } else if (theoreticalSeconds > 0 && totalNetSeconds === 0) {
-        targetValue.innerText = "START...";
-        targetValue.style.color = "#6b7280";
-    } else {
-        targetValue.innerText = "Brak";
-        targetValue.style.color = "#6b7280";
-    }
 
-    if (theoreticalSeconds > 0) {
-        targetDetails.innerText = `Teor: ${secondsToHms(theoreticalSeconds)} | Netto: ${secondsToHms(totalNetSeconds)}`;
-    } else {
-        targetDetails.innerText = "Brak zdefiniowanego czasu teoretycznego.";
+        if (theoreticalSeconds > 0) {
+            targetDetails.innerText = `Teor: ${secondsToHms(theoreticalSeconds)} | Brutto: ${secondsToHms(totalGrossSecondsForTarget)}`;
+        } else {
+            targetDetails.innerText = "Brak zdefiniowanego czasu teoretycznego.";
+        }
     }
 }
 
@@ -754,7 +756,7 @@ async function saveIncidents(fullComplete) {
                     
                     // Wymuszamy format liczbowy/ogólny w Excelu dla wyników
                     const sumRange = sheet.getRangeByIndexes(currentRowIndex, summaryStartCol, 1, 3);
-                    sumRange.numberFormat = [["@"], ["0"], ["0.00"]];
+                    sumRange.numberFormat = [["@", "0", "0.00"]];
                     
                     sheet.getCell(currentRowIndex, summaryStartCol).values = [[safeStr(netTimeHms)]];
                     sheet.getCell(currentRowIndex, summaryStartCol + 1).values = [[Math.round(totalKits)]];
