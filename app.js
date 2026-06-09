@@ -4,11 +4,14 @@ Office.onReady((info) => {
     document.getElementById("btn-to-machine").onclick = showMachineSelection;
     document.getElementById("btn-start-timer").onclick = writeStartTime;
     document.getElementById("btn-stop").onclick = handleStop;
-    document.getElementById("btn-save-partial").onclick = () => saveIncidents(false, false);
-    document.getElementById("btn-save-full").onclick = () => saveIncidents(true, false);
+    document.getElementById("btn-save-partial").onclick = () => saveIncidents(false);
+    document.getElementById("btn-save-full").onclick = () => saveIncidents(true);
     
     // Zmiana rolek w trakcie
-    document.getElementById("btn-change-rolls").onclick = changeRollsDuringProcess;
+    document.getElementById("btn-change-rolls").onclick = () => {
+        document.getElementById("change-rolls-panel").classList.remove("hidden");
+    };
+    document.getElementById("btn-confirm-rolls").onclick = confirmChangeRolls;
     
     // Awarie
     document.getElementById("btn-awaria").onclick = toggleAwaria;
@@ -56,8 +59,13 @@ let currentIntervalStartCol = -1;
 // Pracownicy i operatorzy
 let currentWorkersCount = 4;
 let startWorkersCount = 4;
-let currentWorkerGlobalString = ""; // np. "4+1/3-1"
-let currentOperatorGlobalString = ""; // np. "AB/CD"
+let intervalWorkerDiff = 0; // śledzi zmiany od startu przedziału
+let previousGlobalWorkerString = ""; // co było przed wejściem w ten przedział
+let currentWorkerGlobalString = ""; // cały wynik (np. "4+3/3-1")
+let currentOperatorGlobalString = "";
+
+// Do pamiętania maszyny przy kontynuacji
+let selectedMachineForContinuation = "";
 
 // Awarie
 let isAwariaActive = false;
@@ -266,7 +274,9 @@ async function fetchRowData(forcedRowIndex, isCont) {
             document.getElementById("in-workers").value = "4";
             updateKitsCalc();
             
+            selectedMachineForContinuation = vals[colMap.machine] ? vals[colMap.machine].toString() : "";
             currentWorkerGlobalString = vals[colMap.workers] ? vals[colMap.workers].toString() : "";
+            previousGlobalWorkerString = currentWorkerGlobalString; // Zachowaj historię
             currentOperatorGlobalString = vals[colMap.operator] ? vals[colMap.operator].toString() : "";
             totalAwariaSecondsGlobal = hmsToSeconds(vals[colMap.awarie] ? vals[colMap.awarie].toString() : "00:00:00");
             
@@ -303,7 +313,13 @@ async function showMachineSelection() {
                 const opt = document.createElement("option");
                 opt.value = s.name;
                 opt.text = s.name;
-                if (s.name === activeSheetName) opt.selected = true;
+                
+                if (isContinuing && selectedMachineForContinuation && s.name === selectedMachineForContinuation) {
+                    opt.selected = true;
+                } else if (!isContinuing && s.name === activeSheetName) {
+                    opt.selected = true;
+                }
+                
                 selMachine.appendChild(opt);
             });
             document.getElementById("data-card").classList.add("hidden");
@@ -338,10 +354,11 @@ async function writeStartTime() {
                 currentOperatorGlobalString += "/" + operator;
             }
             
-            if (currentWorkerGlobalString === "") {
+            intervalWorkerDiff = 0; // reset różnicy dla nowego przedziału
+            if (previousGlobalWorkerString === "") {
                 currentWorkerGlobalString = startWorkersCount.toString();
             } else {
-                currentWorkerGlobalString += "/" + startWorkersCount.toString();
+                currentWorkerGlobalString = previousGlobalWorkerString + "/" + startWorkersCount.toString();
             }
             
             sheet.getCell(currentRowIndex, colMap.operator).values = [[currentOperatorGlobalString]];
@@ -382,6 +399,7 @@ async function writeStartTime() {
             
             document.getElementById("machine-card").classList.add("hidden");
             document.getElementById("running-card").classList.remove("hidden");
+            document.body.classList.add("timer-active"); // Tło zielone!
             
             startTimer();
             startAutoSave();
@@ -435,9 +453,21 @@ function adjustWorkers(amount) {
     if (currentWorkersCount < 0) currentWorkersCount = 0;
     document.getElementById("val-current-workers").innerText = currentWorkersCount;
     
-    // Update global string
-    const op = amount > 0 ? "+" : "";
-    currentWorkerGlobalString += `${op}${amount}`;
+    intervalWorkerDiff += amount;
+    
+    // Budujemy string "4+3"
+    let diffStr = "";
+    if (intervalWorkerDiff > 0) {
+        diffStr = "+" + intervalWorkerDiff;
+    } else if (intervalWorkerDiff < 0) {
+        diffStr = intervalWorkerDiff.toString(); // ma znak minus w sobie
+    }
+    
+    if (previousGlobalWorkerString === "") {
+        currentWorkerGlobalString = startWorkersCount.toString() + diffStr;
+    } else {
+        currentWorkerGlobalString = previousGlobalWorkerString + "/" + startWorkersCount.toString() + diffStr;
+    }
     
     // Auto update excel values (End workers + Global string)
     Excel.run(async (ctx) => {
@@ -481,8 +511,8 @@ function toggleAwaria() {
     }
 }
 
-async function changeRollsDuringProcess() {
-    const newRollsStr = prompt("Podaj nową liczbę rolek:");
+async function confirmChangeRolls() {
+    const newRollsStr = document.getElementById("in-new-rolls").value;
     if (!newRollsStr) return;
     const newRolls = parseFloat(newRollsStr);
     if (isNaN(newRolls)) {
@@ -505,6 +535,18 @@ async function changeRollsDuringProcess() {
             if (currentIntervalIndex > 9) currentIntervalIndex = 9; // Overwrite last
             currentIntervalStartCol = colMap.intervalsStart + (currentIntervalIndex * 6);
             
+            // Ponieważ zaczynamy nowy przedział, ten staje się startem.
+            previousGlobalWorkerString = currentWorkerGlobalString;
+            startWorkersCount = currentWorkersCount;
+            intervalWorkerDiff = 0;
+            
+            if (previousGlobalWorkerString === "") {
+                currentWorkerGlobalString = startWorkersCount.toString();
+            } else {
+                currentWorkerGlobalString = previousGlobalWorkerString + "/" + startWorkersCount.toString();
+            }
+            sheet.getCell(currentRowIndex, colMap.workers).values = [[currentWorkerGlobalString]];
+            
             // Zapis nowego przedziału
             const operator = document.getElementById("in-operator").value.trim() || "Brak";
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 0).values = [[operator]];
@@ -523,6 +565,8 @@ async function changeRollsDuringProcess() {
             document.getElementById("running-info").innerHTML = `Item: ${iTxt}, Rev: ${rTxt}<br>Prod: ${pTxt}<br>Rolki: ${newRolls}`;
             
             setStatus("Zmieniono rolki. Przedział rozdzielony.");
+            document.getElementById("change-rolls-panel").classList.add("hidden");
+            document.getElementById("in-new-rolls").value = "";
         });
     } catch (e) {
         console.error(e);
@@ -540,13 +584,13 @@ function handleStop() {
     
     document.getElementById("running-card").classList.add("hidden");
     document.getElementById("incidents-card").classList.remove("hidden");
+    document.body.classList.remove("timer-active"); // Usuń zielone tło
     setStatus("Czas zatrzymany. Wybierz opcję zakończenia.");
 }
 
-async function saveIncidents(fullComplete, isRollChange) {
+async function saveIncidents(fullComplete) {
     const material = document.getElementById("chk-material").checked;
     const breakTime = document.getElementById("chk-break").checked;
-    const breakdown = document.getElementById("chk-breakdown").checked;
     const incidentsText = document.getElementById("in-other-incidents").value;
     
     try {
@@ -607,15 +651,21 @@ async function saveIncidents(fullComplete, isRollChange) {
                 
                 const netTimeHms = secondsToHms(netTimeMs / 1000);
                 
-                // Write summary to 60, 61, 62
-                sheet.getCell(currentRowIndex, colMap.intervalsStart + 60).values = [[netTimeHms]]; // Czas Netto
-                sheet.getCell(currentRowIndex, colMap.intervalsStart + 61).values = [[Math.round(totalKits)]]; // Suma Kitów
-                sheet.getCell(currentRowIndex, colMap.intervalsStart + 62).values = [[avgWorkersFinal.toFixed(2)]]; // Średnia prac
+                // Write summary to 3 columns BEFORE intervalsStart
+                const summaryStartCol = colMap.intervalsStart - 3;
+                if (summaryStartCol >= 0) {
+                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol).values = [["CZAS NETTO"]];
+                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 1).values = [["SUMA KITÓW"]];
+                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 2).values = [["ŚREDNIA PRACOWNIKÓW"]];
+                    
+                    sheet.getCell(currentRowIndex, summaryStartCol).values = [[netTimeHms]];
+                    sheet.getCell(currentRowIndex, summaryStartCol + 1).values = [[Math.round(totalKits)]];
+                    sheet.getCell(currentRowIndex, summaryStartCol + 2).values = [[avgWorkersFinal.toFixed(2)]];
+                }
             }
             
             if (colMap.chkMat !== undefined) sheet.getCell(currentRowIndex, colMap.chkMat).values = [[material ? "TAK" : ""]];
             if (colMap.chkBreak !== undefined) sheet.getCell(currentRowIndex, colMap.chkBreak).values = [[breakTime ? "TAK" : ""]];
-            if (colMap.chkBreakdown !== undefined) sheet.getCell(currentRowIndex, colMap.chkBreakdown).values = [[breakdown ? "TAK" : ""]];
             if (colMap.notes !== undefined) sheet.getCell(currentRowIndex, colMap.notes).values = [[incidentsText]];
             
             await context.sync();
@@ -637,8 +687,10 @@ function resetUI() {
     
     isAwariaActive = false;
     document.body.classList.remove("awaria-active");
+    document.body.classList.remove("timer-active");
     document.getElementById("awaria-timer").classList.add("hidden");
     document.getElementById("btn-awaria").innerText = "STAN AWARII";
+    document.getElementById("change-rolls-panel").classList.add("hidden");
     
     document.getElementById("data-card").classList.add("hidden");
     document.getElementById("machine-card").classList.add("hidden");

@@ -26,6 +26,10 @@ body {
     transition: background-color 0.3s;
 }
 
+body.timer-active {
+    background-color: #dcfce7;
+}
+
 body.awaria-active {
     background: repeating-linear-gradient(
         45deg,
@@ -57,17 +61,11 @@ header h1 {
     color: #111827;
 }
 
-body.awaria-active header h1 {
-    color: #ffffff;
-    text-shadow: 1px 1px 4px #000;
-}
-
 header p {
     font-size: 13px;
     color: var(--text-muted);
     margin: 0;
 }
-body.awaria-active header p { color: #f3f4f6; text-shadow: 1px 1px 2px #000; }
 
 .card {
     background: var(--card-bg);
@@ -332,8 +330,10 @@ button:disabled {
     font-size: 12px;
     color: var(--text-muted);
     min-height: 20px;
+    background: rgba(255,255,255,0.7);
+    padding: 2px 8px;
+    border-radius: 4px;
 }
-body.awaria-active .status { color: #f3f4f6; }
 
 .unfinished-list {
     display: flex;
