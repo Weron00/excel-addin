@@ -27,24 +27,28 @@ body {
 }
 
 body.timer-active {
-    background-color: #dcfce7;
+    background-color: #86efac; /* Mocniejszy zielony */
 }
 
-body.awaria-active {
+/* Pseudo-element dla tła awarii, żeby aplikacja (body i cards) nie migała */
+body.awaria-active::before {
+    content: "";
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: -1;
     background: repeating-linear-gradient(
         45deg,
         #eab308,
-        #eab308 20px,
-        #000000 20px,
-        #000000 40px
+        #eab308 30px,
+        #000000 30px,
+        #000000 60px
     );
-    background-size: 56px 56px;
-    animation: moveStripes 1s linear infinite;
+    animation: flashBg 0.5s infinite alternate;
 }
 
-@keyframes moveStripes {
-    from { background-position: 0 0; }
-    to { background-position: 56px 56px; }
+@keyframes flashBg {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
 .container {

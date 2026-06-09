@@ -83,14 +83,22 @@ function safeStr(val) {
 
 function getFormattedDate() {
     const d = new Date();
-    const datePart = `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
-    let hours = d.getHours();
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12;
-    hours = hours ? hours : 12;
-    const minutes = d.getMinutes().toString().padStart(2, '0');
-    const seconds = d.getSeconds().toString().padStart(2, '0');
-    return `${datePart} ${hours}:${minutes}:${seconds} ${ampm}`;
+    const day = d.getDate().toString().padStart(2, '0');
+    const mo = (d.getMonth() + 1).toString().padStart(2, '0');
+    const y = d.getFullYear();
+    const h = d.getHours().toString().padStart(2, '0');
+    const m = d.getMinutes().toString().padStart(2, '0');
+    return `${day}-${mo}-${y} ${h}:${m}`;
+}
+
+function parseCustomDate(str) {
+    if (!str) return NaN;
+    const parts = str.split(" ");
+    if (parts.length < 2) return NaN;
+    const dateParts = parts[0].split("-");
+    const timeParts = parts[1].split(":");
+    if (dateParts.length !== 3 || timeParts.length < 2) return NaN;
+    return new Date(+dateParts[2], (+dateParts[1]) - 1, +dateParts[0], +timeParts[0], +timeParts[1]).getTime();
 }
 
 function secondsToHms(d) {
@@ -228,13 +236,13 @@ async function scanForUnfinished(context) {
 
 function updateKitsCalc() {
     const rolls = parseFloat(document.getElementById("in-real-rolls").value) || 0;
-    const kitsPerLayer = parseFloat(document.getElementById("val-kpl").innerText) || 0;
+    const kitsPerLayer = parseFloat(document.getElementById("val-kpl").textContent) || 0;
     document.getElementById("lbl-calc-kits").innerText = Math.round(rolls * kitsPerLayer);
 }
 
 function updateModalKitsCalc() {
     const rolls = parseFloat(document.getElementById("in-new-rolls").value) || 0;
-    const kitsPerLayer = parseFloat(document.getElementById("val-kpl").innerText) || 0;
+    const kitsPerLayer = parseFloat(document.getElementById("val-kpl").textContent) || 0;
     document.getElementById("lbl-new-calc-kits").innerText = Math.round(rolls * kitsPerLayer);
 }
 
@@ -409,7 +417,8 @@ async function writeStartTime() {
             const iTxt = document.getElementById("val-item").innerText;
             const rTxt = document.getElementById("val-rev").innerText;
             const pTxt = document.getElementById("val-product").innerText;
-            document.getElementById("running-info").innerHTML = `Item: ${iTxt}, Rev: ${rTxt}<br>Prod: ${pTxt}<br>Rolki: ${realRolls}`;
+            document.getElementById("running-info").innerHTML = `Item: ${iTxt}, Rev: ${rTxt}<br>Prod: ${pTxt}`;
+            document.getElementById("running-rolls-display").innerText = realRolls;
             
             document.getElementById("machine-card").classList.add("hidden");
             document.getElementById("running-card").classList.remove("hidden");
@@ -567,7 +576,8 @@ async function confirmChangeRolls() {
             const iTxt = document.getElementById("val-item").innerText;
             const rTxt = document.getElementById("val-rev").innerText;
             const pTxt = document.getElementById("val-product").innerText;
-            document.getElementById("running-info").innerHTML = `Item: ${iTxt}, Rev: ${rTxt}<br>Prod: ${pTxt}<br>Rolki: ${newRolls}`;
+            document.getElementById("running-info").innerHTML = `Item: ${iTxt}, Rev: ${rTxt}<br>Prod: ${pTxt}`;
+            document.getElementById("running-rolls-display").innerText = newRolls;
             
             setStatus("Zmieniono rolki. Przedział rozdzielony.");
             document.getElementById("change-rolls-panel").classList.add("hidden");
@@ -620,7 +630,7 @@ async function saveIncidents(fullComplete) {
                 let totalKits = 0;
                 let sumWorkerTime = 0;
                 
-                const kitsPerLayer = parseFloat(document.getElementById("val-kpl").innerText) || 0;
+                const kitsPerLayer = parseFloat(document.getElementById("val-kpl").textContent) || 0;
                 
                 for (let i = 0; i < 10; i++) {
                     const wStart = parseFloat(ivals[i*6 + 1]);
@@ -630,8 +640,8 @@ async function saveIncidents(fullComplete) {
                     const stopStr = ivals[i*6 + 5] ? ivals[i*6 + 5].toString().replace(/^'/, "") : "";
                     
                     if (startStr && stopStr) {
-                        const tStart = new Date(startStr).getTime();
-                        const tStop = new Date(stopStr).getTime();
+                        const tStart = parseCustomDate(startStr);
+                        const tStop = parseCustomDate(stopStr);
                         if (!isNaN(tStart) && !isNaN(tStop)) {
                             const durationMs = tStop - tStart;
                             if (durationMs > 0) {
@@ -663,9 +673,13 @@ async function saveIncidents(fullComplete) {
                     sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 1).values = [["SUMA KITÓW"]];
                     sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 2).values = [["ŚREDNIA PRACOWNIKÓW"]];
                     
+                    // Wymuszamy format liczbowy/ogólny w Excelu dla wyników
+                    const sumRange = sheet.getRangeByIndexes(currentRowIndex, summaryStartCol, 1, 3);
+                    sumRange.numberFormat = [["@"], ["0"], ["0.00"]];
+                    
                     sheet.getCell(currentRowIndex, summaryStartCol).values = [[safeStr(netTimeHms)]];
                     sheet.getCell(currentRowIndex, summaryStartCol + 1).values = [[Math.round(totalKits)]];
-                    sheet.getCell(currentRowIndex, summaryStartCol + 2).values = [[avgWorkersFinal.toFixed(2)]];
+                    sheet.getCell(currentRowIndex, summaryStartCol + 2).values = [[Number(avgWorkersFinal.toFixed(2))]];
                 }
             }
             
