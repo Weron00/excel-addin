@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-width=1.0">
-    <title>Nakładka Sekwencji - Część 3</title>
+    <title>Nakładka Sekwencji - Część 5</title>
     <!-- Office JavaScript API -->
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-    <link rel="stylesheet" href="styles.css?v=4">
+    <link rel="stylesheet" href="styles.css?v=5">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -22,7 +22,6 @@
             <div id="unfinished-container" style="margin-top: 16px; display: none;">
                 <h4 style="margin: 0 0 8px 0; font-size: 14px; color: #4b5563;">Kontynuuj:</h4>
                 <div id="unfinished-list" class="unfinished-list">
-                    <!-- Dynamiczne przyciski z niezakończonymi zadaniami -->
                     <div style="font-size:12px; color:#9ca3af;">Skanowanie...</div>
                 </div>
             </div>
@@ -35,8 +34,9 @@
                 <div class="data-item"><span class="label">Rewizja (C)</span><span class="value" id="val-rev">---</span></div>
                 <div class="data-item"><span class="label">Produkt (D)</span><span class="value" id="val-product">---</span></div>
                 <div class="data-item"><span class="label">Nesting (E)</span><span class="value" id="val-nesting">---</span></div>
-                <div class="data-item"><span class="label">Oczek. Warstwy (M)</span><span class="value" id="val-warstwy">---</span></div>
-                <div class="data-item"><span class="label">Zestawy KIT (O)</span><span class="value" id="val-kit">---</span></div>
+                <div class="data-item"><span class="label">Tolerancja</span><span class="value" id="val-tol">---</span></div>
+                <div class="data-item"><span class="label">Oczek. l. rolek (Max)</span><span class="value" id="val-warstwy">---</span></div>
+                <div class="data-item" style="display:none;"><span class="label">Kits per layer</span><span class="value" id="val-kpl">---</span></div>
             </div>
 
             <div id="setup-form" class="form-section">
@@ -45,12 +45,13 @@
                     <input type="text" id="in-operator" placeholder="np. AB">
                 </div>
                 <div class="input-group">
-                    <label for="in-workers">Liczba pracowników</label>
+                    <label for="in-workers">Liczba pracowników na start</label>
                     <input type="number" id="in-workers" value="4">
                 </div>
                 <div class="input-group">
-                    <label for="in-real-layers">Rzeczywista l. warstw</label>
-                    <input type="number" id="in-real-layers" placeholder="Domyślnie z (M)">
+                    <label for="in-real-rolls">Zadeklarowana liczba rolek</label>
+                    <input type="number" id="in-real-rolls" placeholder="Podaj ilość...">
+                    <div style="font-weight:700; color:#3b82f6; font-size:14px; margin-top:4px;">Wyprodukowane kity: <span id="lbl-calc-kits">0</span></div>
                 </div>
             </div>
 
@@ -73,18 +74,34 @@
         </div>
 
         <div id="running-card" class="card hidden">
-            <!-- Skrócone info na górze, żeby widział co robi -->
             <div style="font-size: 11px; color:#6b7280; font-weight:600; text-transform:uppercase; margin-bottom:8px;">Teraz robisz:</div>
             <div style="font-size: 13px; font-weight:700; color:#111827; margin-bottom:12px; line-height:1.4;" id="running-info">
-                Item: -, Rewizja: -<br>
+                Item: -, Rev: -<br>
                 Prod: -<br>
-                Nesting: -
+                Rolki: -
             </div>
             
-            <div class="timer-display" id="timer">00:00:00</div>
-            <div class="actions">
-                <button id="btn-stop" class="btn-action stop">STOP</button>
+            <div class="worker-control">
+                <button id="btn-sub-worker" class="btn-round">-</button>
+                <div style="text-align:center;">
+                    <span id="val-current-workers">4</span><br>
+                    <span style="font-size:10px; color:#6b7280;">Pracowników</span>
+                </div>
+                <button id="btn-add-worker" class="btn-round">+</button>
             </div>
+
+            <div class="timer-display" id="timer">00:00:00</div>
+            <div id="awaria-timer" class="timer-display awaria-timer hidden">00:00:00</div>
+            
+            <div class="actions" style="margin-bottom:8px;">
+                <button id="btn-awaria" class="btn-action awaria">STAN AWARII</button>
+            </div>
+            
+            <div class="actions">
+                <button id="btn-stop" class="btn-action stop">ZATRZYMAJ PRACĘ</button>
+            </div>
+            
+            <button id="btn-change-rolls" class="btn-secondary" style="margin-top:8px;">Zmieniam Liczbę Rolek</button>
         </div>
 
         <div id="incidents-card" class="card hidden">
@@ -92,7 +109,7 @@
             <div class="checkbox-group">
                 <label><input type="checkbox" id="chk-material"> Zmiana materiału</label>
                 <label><input type="checkbox" id="chk-break"> Przerwa w trakcie</label>
-                <label><input type="checkbox" id="chk-breakdown"> Awaria</label>
+                <label><input type="checkbox" id="chk-breakdown"> Oznacz jako Awarię Mniejszą</label>
             </div>
             <div class="input-group">
                 <label for="in-other-incidents">Inne incydenty (Opis)</label>
@@ -108,6 +125,6 @@
         <div id="status-message" class="status">Ładowanie...</div>
     </div>
 
-    <script src="app.js?v=4"></script>
+    <script src="app.js?v=5"></script>
 </body>
 </html>
