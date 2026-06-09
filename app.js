@@ -10,7 +10,10 @@ Office.onReady((info) => {
     // Zmiana rolek w trakcie
     document.getElementById("btn-change-rolls").onclick = () => {
         document.getElementById("change-rolls-panel").classList.remove("hidden");
+        document.getElementById("in-new-rolls").value = document.getElementById("in-real-rolls").value;
+        updateModalKitsCalc();
     };
+    document.getElementById("in-new-rolls").addEventListener("input", updateModalKitsCalc);
     document.getElementById("btn-confirm-rolls").onclick = confirmChangeRolls;
     
     // Awarie
@@ -72,6 +75,11 @@ let isAwariaActive = false;
 let awariaTimerInterval = null;
 let awariaSecondsElapsed = 0;
 let totalAwariaSecondsGlobal = 0;
+
+function safeStr(val) {
+    if (val === undefined || val === null) return "";
+    return "'" + val.toString();
+}
 
 function getFormattedDate() {
     const d = new Date();
@@ -224,6 +232,12 @@ function updateKitsCalc() {
     document.getElementById("lbl-calc-kits").innerText = Math.round(rolls * kitsPerLayer);
 }
 
+function updateModalKitsCalc() {
+    const rolls = parseFloat(document.getElementById("in-new-rolls").value) || 0;
+    const kitsPerLayer = parseFloat(document.getElementById("val-kpl").innerText) || 0;
+    document.getElementById("lbl-new-calc-kits").innerText = Math.round(rolls * kitsPerLayer);
+}
+
 async function fetchRowData(forcedRowIndex, isCont) {
     isContinuing = isCont;
     try {
@@ -361,11 +375,11 @@ async function writeStartTime() {
                 currentWorkerGlobalString = previousGlobalWorkerString + "/" + startWorkersCount.toString();
             }
             
-            sheet.getCell(currentRowIndex, colMap.operator).values = [[currentOperatorGlobalString]];
-            sheet.getCell(currentRowIndex, colMap.workers).values = [[currentWorkerGlobalString]];
+            sheet.getCell(currentRowIndex, colMap.operator).values = [[safeStr(currentOperatorGlobalString)]];
+            sheet.getCell(currentRowIndex, colMap.workers).values = [[safeStr(currentWorkerGlobalString)]];
             
             if (!isContinuing) {
-                sheet.getCell(currentRowIndex, colMap.startGlobal).values = [[dateStr]];
+                sheet.getCell(currentRowIndex, colMap.startGlobal).values = [[safeStr(dateStr)]];
             }
             sheet.getCell(currentRowIndex, colMap.machine).values = [[machine]];
             
@@ -389,7 +403,7 @@ async function writeStartTime() {
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 1).values = [[startWorkersCount]];
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 2).values = [[currentWorkersCount]];
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 3).values = [[realRolls]];
-            sheet.getCell(currentRowIndex, currentIntervalStartCol + 4).values = [[dateStr]];
+            sheet.getCell(currentRowIndex, currentIntervalStartCol + 4).values = [[safeStr(dateStr)]];
             await context.sync();
             
             const iTxt = document.getElementById("val-item").innerText;
@@ -430,8 +444,7 @@ function startAutoSave() {
             try {
                 await Excel.run(async (ctx) => {
                     const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
-                    // col + 5 = Stop Time
-                    sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[getFormattedDate()]];
+                    sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[safeStr(getFormattedDate())]];
                     await ctx.sync();
                 });
             } catch (e) {
@@ -472,7 +485,7 @@ function adjustWorkers(amount) {
     // Auto update excel values (End workers + Global string)
     Excel.run(async (ctx) => {
         const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
-        sheet.getCell(currentRowIndex, colMap.workers).values = [[currentWorkerGlobalString]];
+        sheet.getCell(currentRowIndex, colMap.workers).values = [[safeStr(currentWorkerGlobalString)]];
         sheet.getCell(currentRowIndex, currentIntervalStartCol + 2).values = [[currentWorkersCount]];
         await ctx.sync();
     }).catch(e => console.warn(e));
@@ -505,7 +518,7 @@ function toggleAwaria() {
         // Zapisz sumę awarii do excela
         Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
-            sheet.getCell(currentRowIndex, colMap.awarie).values = [[secondsToHms(totalAwariaSecondsGlobal)]];
+            sheet.getCell(currentRowIndex, colMap.awarie).values = [[safeStr(secondsToHms(totalAwariaSecondsGlobal))]];
             await ctx.sync();
         }).catch(e => console.warn(e));
     }
@@ -528,24 +541,16 @@ async function confirmChangeRolls() {
             const dateStr = getFormattedDate();
             
             // Koniec starego
-            sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[dateStr]];
+            sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[safeStr(dateStr)]];
             
             // Ustal nowy index przedziału
             currentIntervalIndex++;
             if (currentIntervalIndex > 9) currentIntervalIndex = 9; // Overwrite last
             currentIntervalStartCol = colMap.intervalsStart + (currentIntervalIndex * 6);
             
-            // Ponieważ zaczynamy nowy przedział, ten staje się startem.
-            previousGlobalWorkerString = currentWorkerGlobalString;
-            startWorkersCount = currentWorkersCount;
-            intervalWorkerDiff = 0;
-            
-            if (previousGlobalWorkerString === "") {
-                currentWorkerGlobalString = startWorkersCount.toString();
-            } else {
-                currentWorkerGlobalString = previousGlobalWorkerString + "/" + startWorkersCount.toString();
-            }
-            sheet.getCell(currentRowIndex, colMap.workers).values = [[currentWorkerGlobalString]];
+            // Ponieważ zaczynamy nowy przedział, modyfikujemy TYLKO zapis startu przedziału. 
+            // NIE modyfikujemy stringa globalnego pracowników, bo to jest "w locie".
+            // Nie resetujemy intervalWorkerDiff. Zapis przedziału łapie po prostu obecny stan jako "Workers Start".
             
             // Zapis nowego przedziału
             const operator = document.getElementById("in-operator").value.trim() || "Brak";
@@ -553,7 +558,7 @@ async function confirmChangeRolls() {
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 1).values = [[currentWorkersCount]];
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 2).values = [[currentWorkersCount]];
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 3).values = [[newRolls]];
-            sheet.getCell(currentRowIndex, currentIntervalStartCol + 4).values = [[dateStr]];
+            sheet.getCell(currentRowIndex, currentIntervalStartCol + 4).values = [[safeStr(dateStr)]];
             await ctx.sync();
             
             document.getElementById("in-real-rolls").value = newRolls;
@@ -600,11 +605,11 @@ async function saveIncidents(fullComplete) {
             const dateStr = getFormattedDate();
             
             if (currentIntervalStartCol !== -1) {
-                sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[dateStr]]; // Stop Time
+                sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[safeStr(dateStr)]]; // Stop Time
             }
             
             if (fullComplete) {
-                sheet.getCell(currentRowIndex, colMap.endGlobal).values = [[dateStr]];
+                sheet.getCell(currentRowIndex, colMap.endGlobal).values = [[safeStr(dateStr)]];
                 
                 // --- PODSUMOWANIE (3 kolumny na samym końcu przedziałów = intervalsStart + 60) ---
                 const dataRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart, 1, 60).load("values");
@@ -621,8 +626,8 @@ async function saveIncidents(fullComplete) {
                     const wStart = parseFloat(ivals[i*6 + 1]);
                     const wStop = parseFloat(ivals[i*6 + 2]);
                     const rolls = parseFloat(ivals[i*6 + 3]) || 0;
-                    const startStr = ivals[i*6 + 4];
-                    const stopStr = ivals[i*6 + 5];
+                    const startStr = ivals[i*6 + 4] ? ivals[i*6 + 4].toString().replace(/^'/, "") : "";
+                    const stopStr = ivals[i*6 + 5] ? ivals[i*6 + 5].toString().replace(/^'/, "") : "";
                     
                     if (startStr && stopStr) {
                         const tStart = new Date(startStr).getTime();
@@ -658,7 +663,7 @@ async function saveIncidents(fullComplete) {
                     sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 1).values = [["SUMA KITÓW"]];
                     sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 2).values = [["ŚREDNIA PRACOWNIKÓW"]];
                     
-                    sheet.getCell(currentRowIndex, summaryStartCol).values = [[netTimeHms]];
+                    sheet.getCell(currentRowIndex, summaryStartCol).values = [[safeStr(netTimeHms)]];
                     sheet.getCell(currentRowIndex, summaryStartCol + 1).values = [[Math.round(totalKits)]];
                     sheet.getCell(currentRowIndex, summaryStartCol + 2).values = [[avgWorkersFinal.toFixed(2)]];
                 }
