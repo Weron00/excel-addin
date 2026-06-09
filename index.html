@@ -4,9 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-width=1.0">
     <title>Nakładka Sekwencji - Część 5</title>
-    <!-- Office JavaScript API -->
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-    <link rel="stylesheet" href="styles.css?v=5">
+    <link rel="stylesheet" href="styles.css?v=8">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -81,7 +80,13 @@
             </div>
             
             <div style="font-size: 15px; font-weight: 800; color:#2563eb; background:#eff6ff; padding:8px; border-radius:6px; border:1px solid #bfdbfe; margin-bottom:12px; text-align:center;">
-                ZAŁOŻONE ROLKI: <span id="running-rolls-display" style="font-size:18px;">-</span>
+                Liczba ciętych rolek: <span id="running-rolls-display" style="font-size:18px;">-</span>
+            </div>
+            
+            <div style="font-size: 13px; font-weight:700; margin-bottom:12px; text-align:center; padding:8px; border-radius:6px; border:1px solid #e5e7eb; background:#ffffff;" id="target-container">
+                <div style="font-size:10px; color:#6b7280; text-transform:uppercase;">Wydajność (Target)</div>
+                <div id="target-value" style="font-size:24px; font-weight:800;">--- %</div>
+                <div style="font-size:11px; color:#9ca3af; margin-top:2px;" id="target-details">Teoretyczny: --- | Netto: ---</div>
             </div>
             
             <div class="worker-control">
@@ -98,6 +103,11 @@
             
             <div class="actions" style="margin-bottom:8px;">
                 <button id="btn-awaria" class="btn-action awaria">STAN AWARII</button>
+            </div>
+            
+            <div class="input-group" style="margin-bottom: 8px;">
+                <label for="in-running-notes" style="font-size:12px;">Notatki na żywo</label>
+                <textarea id="in-running-notes" rows="2" placeholder="Wpisz komentarz..."></textarea>
             </div>
             
             <div class="actions">
@@ -132,7 +142,6 @@
         
         <div id="status-message" class="status">Ładowanie...</div>
     </div>
-
-    <script src="app.js?v=5"></script>
+    <script src="app.js?v=8"></script>
 </body>
 </html>

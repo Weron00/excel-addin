@@ -58,6 +58,8 @@ let isContinuing = false;
 // Przedziały
 let currentIntervalIndex = -1; // 0 do 9
 let currentIntervalStartCol = -1;
+let previousTotalGrossSeconds = 0;
+let theoreticalSeconds = 0;
 
 // Pracownicy i operatorzy
 let currentWorkersCount = 4;
@@ -175,6 +177,7 @@ async function initializeColumnMap(context) {
             else if (valUpper === "MASZYNA") { colMap.machine = c; }
             else if (valUpper === "AWARIE") { colMap.awarie = c; }
             else if (valUpper === "START PRZEDZIAŁÓW") { colMap.intervalsStart = c; }
+            else if (valUpper === "CZAS TEORETYCZNY") { colMap.theoretical = c; }
         }
     }
 
@@ -301,6 +304,40 @@ async function fetchRowData(forcedRowIndex, isCont) {
             previousGlobalWorkerString = currentWorkerGlobalString; // Zachowaj historię
             currentOperatorGlobalString = vals[colMap.operator] ? vals[colMap.operator].toString() : "";
             totalAwariaSecondsGlobal = hmsToSeconds(vals[colMap.awarie] ? vals[colMap.awarie].toString() : "00:00:00");
+            
+            const existingNotes = vals[colMap.notes] ? vals[colMap.notes].toString() : "";
+            document.getElementById("in-other-incidents").value = existingNotes;
+            document.getElementById("in-running-notes").value = existingNotes;
+            
+            // Obliczamy wcześniejsze czasy z przedziałów
+            previousTotalGrossSeconds = 0;
+            if (colMap.intervalsStart !== undefined) {
+                for (let i = 0; i < 10; i++) {
+                    const startIdx = colMap.intervalsStart + (i * 6) + 4;
+                    const stopIdx = colMap.intervalsStart + (i * 6) + 5;
+                    const startStr = vals[startIdx] ? vals[startIdx].toString().replace(/^'/, "") : "";
+                    const stopStr = vals[stopIdx] ? vals[stopIdx].toString().replace(/^'/, "") : "";
+                    if (startStr && stopStr) {
+                        const tStart = parseCustomDate(startStr);
+                        const tStop = parseCustomDate(stopStr);
+                        if (!isNaN(tStart) && !isNaN(tStop)) {
+                            const durationMs = tStop - tStart;
+                            if (durationMs > 0) previousTotalGrossSeconds += Math.floor(durationMs / 1000);
+                        }
+                    }
+                }
+            }
+            
+            theoreticalSeconds = 0;
+            if (colMap.theoretical !== undefined) {
+                const theoVal = vals[colMap.theoretical] ? vals[colMap.theoretical].toString().trim() : "";
+                if (theoVal.includes(":")) {
+                    theoreticalSeconds = hmsToSeconds(theoVal);
+                } else {
+                    const num = parseFloat(theoVal);
+                    if (!isNaN(num)) theoreticalSeconds = num * 24 * 3600;
+                }
+            }
             
             if (isContinuing) {
                 document.getElementById("btn-to-machine").innerText = "KONTYNUUJ PROCES";
@@ -445,6 +482,37 @@ function startTimer() {
 
 function updateTimerDisplay() {
     document.getElementById("timer").innerText = secondsToHms(secondsElapsed);
+    
+    let totalNetSeconds = previousTotalGrossSeconds + secondsElapsed - totalAwariaSecondsGlobal - (isAwariaActive ? awariaSecondsElapsed : 0);
+    if (totalNetSeconds < 0) totalNetSeconds = 0;
+    
+    const targetValue = document.getElementById("target-value");
+    const targetDetails = document.getElementById("target-details");
+    
+    if (theoreticalSeconds > 0 && totalNetSeconds > 0) {
+        const targetPct = (theoreticalSeconds / totalNetSeconds) * 100;
+        targetValue.innerText = Math.round(targetPct) + " %";
+        
+        if (targetPct >= 100) {
+            targetValue.style.color = "#16a34a"; // green
+        } else if (targetPct >= 80) {
+            targetValue.style.color = "#d97706"; // yellow/orange
+        } else {
+            targetValue.style.color = "#dc2626"; // red
+        }
+    } else if (theoreticalSeconds > 0 && totalNetSeconds === 0) {
+        targetValue.innerText = "START...";
+        targetValue.style.color = "#6b7280";
+    } else {
+        targetValue.innerText = "Brak";
+        targetValue.style.color = "#6b7280";
+    }
+
+    if (theoreticalSeconds > 0) {
+        targetDetails.innerText = `Teor: ${secondsToHms(theoreticalSeconds)} | Netto: ${secondsToHms(totalNetSeconds)}`;
+    } else {
+        targetDetails.innerText = "Brak zdefiniowanego czasu teoretycznego.";
+    }
 }
 
 function startAutoSave() {
@@ -454,6 +522,11 @@ function startAutoSave() {
                 await Excel.run(async (ctx) => {
                     const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
                     sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[safeStr(getFormattedDate())]];
+                    
+                    if (colMap.notes !== undefined) {
+                        const notesVal = document.getElementById("in-running-notes").value;
+                        sheet.getCell(currentRowIndex, colMap.notes).values = [[notesVal]];
+                    }
                     await ctx.sync();
                 });
             } catch (e) {
@@ -507,17 +580,21 @@ function toggleAwaria() {
     
     if (isAwariaActive) {
         document.body.classList.add("awaria-active");
+        document.body.classList.remove("timer-active"); // Usuwa zielony
         btn.innerText = "ZAKOŃCZ STAN AWARII";
         timerUI.classList.remove("hidden");
         
         awariaSecondsElapsed = 0;
         timerUI.innerText = secondsToHms(0);
+        updateTimerDisplay(); // aktualizacja by zamrozić netto
         awariaTimerInterval = setInterval(() => {
             awariaSecondsElapsed++;
             timerUI.innerText = secondsToHms(awariaSecondsElapsed);
+            updateTimerDisplay(); // aktualizacja by zamrozić netto w trakcie awarii
         }, 1000);
     } else {
         document.body.classList.remove("awaria-active");
+        document.body.classList.add("timer-active"); // Przywraca zielony
         btn.innerText = "STAN AWARII";
         timerUI.classList.add("hidden");
         clearInterval(awariaTimerInterval);
@@ -596,6 +673,8 @@ function handleStop() {
     }
     clearInterval(timerInterval);
     stopAutoSave(); 
+    
+    document.getElementById("in-other-incidents").value = document.getElementById("in-running-notes").value;
     
     document.getElementById("running-card").classList.add("hidden");
     document.getElementById("incidents-card").classList.remove("hidden");
