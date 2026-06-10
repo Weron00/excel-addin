@@ -5,12 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-width=1.0">
     <title>Nakładka Sekwencji - Część 5</title>
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-    <link rel="stylesheet" href="styles.css?v=9">
+    <link rel="stylesheet" href="styles.css?v=10">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="container">
-        <header>
+        <header id="main-header">
             <h1>Panel Sterowania</h1>
             <p>Zaznacz wiersz lub wybierz z listy kontynuacji</p>
         </header>
@@ -79,17 +79,17 @@
                 Prod: -
             </div>
             
-            <div style="font-size: 15px; font-weight: 800; color:#2563eb; background:#eff6ff; padding:8px; border-radius:6px; border:1px solid #bfdbfe; margin-bottom:12px; text-align:center;">
+            <div style="font-size: 15px; font-weight: 800; color:#2563eb; background:#eff6ff; padding:8px; border-radius:6px; border:1px solid #bfdbfe; margin-bottom:8px; text-align:center;">
                 Liczba ciętych rolek: <span id="running-rolls-display" style="font-size:18px;">-</span>
             </div>
             
-            <div style="font-size: 13px; font-weight:700; margin-bottom:12px; text-align:center; padding:8px; border-radius:6px; border:1px solid #e5e7eb; background:#ffffff;" id="target-container">
+            <div style="font-size: 13px; font-weight:700; margin-bottom:8px; text-align:center; padding:8px; border-radius:6px; border:1px solid #e5e7eb; background:#ffffff;" id="target-container">
                 <div style="font-size:10px; color:#6b7280; text-transform:uppercase;">Wydajność (Target)</div>
                 <div id="target-value" style="font-size:24px; font-weight:800;">--- %</div>
                 <div style="font-size:11px; color:#9ca3af; margin-top:2px;" id="target-details">Teoretyczny: --- | Brutto: ---</div>
             </div>
             
-            <div class="worker-control">
+            <div class="worker-control" style="margin-bottom:8px;">
                 <button id="btn-sub-worker" class="btn-round">-</button>
                 <div style="text-align:center;">
                     <span id="val-current-workers">4</span><br>
@@ -98,16 +98,16 @@
                 <button id="btn-add-worker" class="btn-round">+</button>
             </div>
 
-            <div class="timer-display" id="timer">00:00:00</div>
-            <div id="awaria-timer" class="timer-display awaria-timer hidden">00:00:00</div>
+            <div class="timer-display" id="timer" style="margin-bottom:8px; padding:10px;">00:00:00</div>
+            <div id="awaria-timer" class="timer-display awaria-timer hidden" style="margin-bottom:8px; padding:10px;">00:00:00</div>
             
-            <div class="actions" style="margin-bottom:8px;">
+            <div class="actions" style="margin-bottom:4px;">
                 <button id="btn-awaria" class="btn-action awaria">STAN AWARII</button>
             </div>
             
-            <div class="input-group" style="margin-bottom: 8px;">
-                <label for="in-running-notes" style="font-size:12px;">Notatki na żywo</label>
-                <textarea id="in-running-notes" rows="2" placeholder="Wpisz komentarz..."></textarea>
+            <div class="input-group" style="margin-bottom: 4px;">
+                <label for="in-running-notes" style="font-size:11px;">Notatki na żywo</label>
+                <textarea id="in-running-notes" rows="1" placeholder="Wpisz komentarz..."></textarea>
             </div>
             
             <div class="actions">
@@ -142,6 +142,6 @@
         
         <div id="status-message" class="status">Ładowanie...</div>
     </div>
-    <script src="app.js?v=9"></script>
+    <script src="app.js?v=10"></script>
 </body>
 </html>

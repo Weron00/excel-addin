@@ -460,6 +460,7 @@ async function writeStartTime() {
             document.getElementById("machine-card").classList.add("hidden");
             document.getElementById("running-card").classList.remove("hidden");
             document.body.classList.add("timer-active"); // Tło zielone!
+            document.getElementById("main-header").classList.add("hidden");
             
             startTimer();
             startAutoSave();
@@ -679,6 +680,8 @@ function handleStop() {
     document.getElementById("in-other-incidents").value = document.getElementById("in-running-notes").value;
     
     document.getElementById("running-card").classList.add("hidden");
+    document.getElementById("incidents-card").classList.add("hidden");
+    document.getElementById("main-header").classList.remove("hidden");
     document.getElementById("incidents-card").classList.remove("hidden");
     document.body.classList.remove("timer-active"); // Usuń zielone tło
     setStatus("Czas zatrzymany. Wybierz opcję zakończenia.");
@@ -720,6 +723,12 @@ async function saveIncidents(fullComplete) {
                     const startStr = ivals[i*6 + 4] ? ivals[i*6 + 4].toString().replace(/^'/, "") : "";
                     const stopStr = ivals[i*6 + 5] ? ivals[i*6 + 5].toString().replace(/^'/, "") : "";
                     
+                    if (startStr && rolls > 0) {
+                        if (i === 0 || rolls !== parseFloat(ivals[(i-1)*6 + 3])) {
+                            totalKits += (rolls * kitsPerLayer);
+                        }
+                    }
+
                     if (startStr && stopStr) {
                         const tStart = parseCustomDate(startStr);
                         const tStop = parseCustomDate(stopStr);
@@ -727,8 +736,6 @@ async function saveIncidents(fullComplete) {
                             const durationMs = tStop - tStart;
                             if (durationMs > 0) {
                                 totalTimeMs += durationMs;
-                                totalKits += (rolls * kitsPerLayer);
-                                
                                 const avgWorkers = (isNaN(wStart) || isNaN(wStop)) ? 0 : ((wStart + wStop) / 2);
                                 sumWorkerTime += (avgWorkers * durationMs);
                             }
@@ -761,6 +768,38 @@ async function saveIncidents(fullComplete) {
                     sheet.getCell(currentRowIndex, summaryStartCol).values = [[safeStr(netTimeHms)]];
                     sheet.getCell(currentRowIndex, summaryStartCol + 1).values = [[Math.round(totalKits)]];
                     sheet.getCell(currentRowIndex, summaryStartCol + 2).values = [[Number(avgWorkersFinal.toFixed(2))]];
+                }
+                
+                // Generowanie nagłówków i obramowań dla wykorzystanych przedziałów
+                if (colMap.intervalsStart !== undefined && currentIntervalIndex >= 0) {
+                    const usedColsCount = (currentIntervalIndex + 1) * 6;
+                    for (let i = 0; i <= currentIntervalIndex; i++) {
+                        const sCol = colMap.intervalsStart + (i * 6);
+                        sheet.getCell(dataStartRowIndex - 1, sCol + 0).values = [[`Operator ${i+1}`]];
+                        sheet.getCell(dataStartRowIndex - 1, sCol + 1).values = [[`Prac. Start ${i+1}`]];
+                        sheet.getCell(dataStartRowIndex - 1, sCol + 2).values = [[`Prac. Koniec ${i+1}`]];
+                        sheet.getCell(dataStartRowIndex - 1, sCol + 3).values = [[`Rolki ${i+1}`]];
+                        sheet.getCell(dataStartRowIndex - 1, sCol + 4).values = [[`Start ${i+1}`]];
+                        sheet.getCell(dataStartRowIndex - 1, sCol + 5).values = [[`Koniec ${i+1}`]];
+                    }
+                    
+                    const intervalHeaderRange = sheet.getRangeByIndexes(dataStartRowIndex - 1, colMap.intervalsStart, 1, usedColsCount);
+                    intervalHeaderRange.format.borders.getItem('EdgeTop').style = 'Continuous';
+                    intervalHeaderRange.format.borders.getItem('EdgeBottom').style = 'Continuous';
+                    intervalHeaderRange.format.borders.getItem('EdgeLeft').style = 'Continuous';
+                    intervalHeaderRange.format.borders.getItem('EdgeRight').style = 'Continuous';
+                    intervalHeaderRange.format.borders.getItem('InsideVertical').style = 'Continuous';
+                    intervalHeaderRange.format.borders.color = "#a3a3a3";
+                    intervalHeaderRange.format.borders.weight = "Thin";
+                    
+                    const intervalDataRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart, 1, usedColsCount);
+                    intervalDataRange.format.borders.getItem('EdgeTop').style = 'Continuous';
+                    intervalDataRange.format.borders.getItem('EdgeBottom').style = 'Continuous';
+                    intervalDataRange.format.borders.getItem('EdgeLeft').style = 'Continuous';
+                    intervalDataRange.format.borders.getItem('EdgeRight').style = 'Continuous';
+                    intervalDataRange.format.borders.getItem('InsideVertical').style = 'Continuous';
+                    intervalDataRange.format.borders.color = "#a3a3a3";
+                    intervalDataRange.format.borders.weight = "Thin";
                 }
             }
             
