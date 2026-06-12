@@ -197,8 +197,12 @@ async function initializeColumnMap(context) {
     if (colMap.intervalsStart === undefined) missing.push("START PRZEDZIAŁÓW");
 
     if (missing.length > 0) {
-        document.getElementById("unfinished-list").innerHTML = `<div style="color:red; font-size:12px;"><b>Błąd:</b> Brakuje kolumn:<br>${missing.join(", ")}</div>`;
+        document.getElementById("btn-fetch").style.display = "none";
+        document.getElementById("unfinished-list").innerHTML = `<div style="color:#dc2626; font-size:13px; padding:10px; border:1px solid #fca5a5; background:#fef2f2; border-radius:6px; line-height:1.4;"><b>BŁĄD STRUKTURY ARKUSZA:</b><br>Brakuje następujących kolumn w pierwszych 10 wierszach:<br><br><b>${missing.join(", ")}</b></div>`;
+        document.getElementById("unfinished-container").style.display = "block";
         throw new Error("Brakuje kolumn w pierwszych 10 wierszach: " + missing.join(", "));
+    } else {
+        document.getElementById("btn-fetch").style.display = "inline-block";
     }
     
     dataStartRowIndex = Math.max(itemRow, startDayRow) + 1;
@@ -313,8 +317,8 @@ async function fetchRowData(forcedRowIndex, isCont) {
             previousTotalGrossSeconds = 0;
             if (colMap.intervalsStart !== undefined) {
                 for (let i = 0; i < 10; i++) {
-                    const startIdx = colMap.intervalsStart + (i * 6) + 4;
-                    const stopIdx = colMap.intervalsStart + (i * 6) + 5;
+                    const startIdx = colMap.intervalsStart + 1 + (i * 6) + 4;
+                    const stopIdx = colMap.intervalsStart + 1 + (i * 6) + 5;
                     const startStr = vals[startIdx] ? vals[startIdx].toString().replace(/^'/, "") : "";
                     const stopStr = vals[stopIdx] ? vals[stopIdx].toString().replace(/^'/, "") : "";
                     if (startStr && stopStr) {
@@ -429,7 +433,7 @@ async function writeStartTime() {
             sheet.getCell(currentRowIndex, colMap.machine).values = [[machine]];
             
             // Znajdowanie przedziału
-            const intervalsRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart, 1, 60).load("values");
+            const intervalsRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 60).load("values");
             await context.sync();
             
             currentIntervalIndex = 9; // domyślnie ostatni jeśli wszystkie zajęte
@@ -441,7 +445,7 @@ async function writeStartTime() {
                 }
             }
             
-            currentIntervalStartCol = colMap.intervalsStart + (currentIntervalIndex * 6);
+            currentIntervalStartCol = colMap.intervalsStart + 1 + (currentIntervalIndex * 6);
             
             // Zapis przedziału (Operator, Pracownicy Start, Pracownicy End (na razie = Start), Rolki, Start, Puste)
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 0).values = [[operator]];
@@ -635,7 +639,7 @@ async function confirmChangeRolls() {
             // Ustal nowy index przedziału
             currentIntervalIndex++;
             if (currentIntervalIndex > 9) currentIntervalIndex = 9; // Overwrite last
-            currentIntervalStartCol = colMap.intervalsStart + (currentIntervalIndex * 6);
+            currentIntervalStartCol = colMap.intervalsStart + 1 + (currentIntervalIndex * 6);
             
             // Ponieważ zaczynamy nowy przedział, modyfikujemy TYLKO zapis startu przedziału. 
             // NIE modyfikujemy stringa globalnego pracowników, bo to jest "w locie".
@@ -675,6 +679,7 @@ function handleStop() {
         return;
     }
     clearInterval(timerInterval);
+    timerInterval = null;
     stopAutoSave(); 
     
     document.getElementById("in-other-incidents").value = document.getElementById("in-running-notes").value;
@@ -706,7 +711,7 @@ async function saveIncidents(fullComplete) {
                 sheet.getCell(currentRowIndex, colMap.endGlobal).values = [[safeStr(dateStr)]];
                 
                 // --- PODSUMOWANIE (3 kolumny na samym końcu przedziałów = intervalsStart + 60) ---
-                const dataRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart, 1, 60).load("values");
+                const dataRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 60).load("values");
                 await context.sync();
                 
                 const ivals = dataRange.values[0];
@@ -774,7 +779,7 @@ async function saveIncidents(fullComplete) {
                 if (colMap.intervalsStart !== undefined && currentIntervalIndex >= 0) {
                     const usedColsCount = (currentIntervalIndex + 1) * 6;
                     for (let i = 0; i <= currentIntervalIndex; i++) {
-                        const sCol = colMap.intervalsStart + (i * 6);
+                        const sCol = colMap.intervalsStart + 1 + (i * 6);
                         sheet.getCell(dataStartRowIndex - 1, sCol + 0).values = [[`Operator ${i+1}`]];
                         sheet.getCell(dataStartRowIndex - 1, sCol + 1).values = [[`Prac. Start ${i+1}`]];
                         sheet.getCell(dataStartRowIndex - 1, sCol + 2).values = [[`Prac. Koniec ${i+1}`]];
@@ -783,7 +788,7 @@ async function saveIncidents(fullComplete) {
                         sheet.getCell(dataStartRowIndex - 1, sCol + 5).values = [[`Koniec ${i+1}`]];
                     }
                     
-                    const intervalHeaderRange = sheet.getRangeByIndexes(dataStartRowIndex - 1, colMap.intervalsStart, 1, usedColsCount);
+                    const intervalHeaderRange = sheet.getRangeByIndexes(dataStartRowIndex - 1, colMap.intervalsStart + 1, 1, usedColsCount);
                     intervalHeaderRange.format.borders.getItem('EdgeTop').style = 'Continuous';
                     intervalHeaderRange.format.borders.getItem('EdgeBottom').style = 'Continuous';
                     intervalHeaderRange.format.borders.getItem('EdgeLeft').style = 'Continuous';
@@ -792,7 +797,7 @@ async function saveIncidents(fullComplete) {
                     intervalHeaderRange.format.borders.color = "#a3a3a3";
                     intervalHeaderRange.format.borders.weight = "Thin";
                     
-                    const intervalDataRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart, 1, usedColsCount);
+                    const intervalDataRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, usedColsCount);
                     intervalDataRange.format.borders.getItem('EdgeTop').style = 'Continuous';
                     intervalDataRange.format.borders.getItem('EdgeBottom').style = 'Continuous';
                     intervalDataRange.format.borders.getItem('EdgeLeft').style = 'Continuous';
