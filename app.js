@@ -1,8 +1,8 @@
 Office.onReady((info) => {
     document.getElementById("btn-fetch").onclick = () => fetchRowData(null, false);
     document.getElementById("btn-cancel-data").onclick = resetUI;
-    document.getElementById("btn-to-machine").onclick = showMachineSelection;
-    document.getElementById("btn-start-timer").onclick = writeStartTime;
+    document.getElementById("btn-to-machine").onclick = handleToMachineClick;
+    document.getElementById("btn-start-timer").onclick = handleStartTimerClick;
     document.getElementById("btn-stop").onclick = handleStop;
     document.getElementById("btn-save-partial").onclick = () => saveIncidents(false);
     document.getElementById("btn-save-full").onclick = () => saveIncidents(true);
@@ -51,6 +51,7 @@ Office.onReady((info) => {
 let colMap = {};
 let dataStartRowIndex = -1;
 let currentRowIndex = -1;
+let currentColumnIndex = 0;
 let activeSheetName = "";
 
 // Timer główny
@@ -283,9 +284,10 @@ async function fetchRowData(forcedRowIndex, isCont) {
             
             let rowIdx = forcedRowIndex;
             if (rowIdx === null) {
-                const activeCell = context.workbook.getActiveCell().load("rowIndex");
+                const activeCell = context.workbook.getActiveCell().load(["rowIndex", "columnIndex"]);
                 await context.sync();
                 rowIdx = activeCell.rowIndex;
+                currentColumnIndex = activeCell.columnIndex;
             }
             if (rowIdx < dataStartRowIndex) {
                 setStatus("Wybierz wiersz poniżej tytułów.");
@@ -293,8 +295,8 @@ async function fetchRowData(forcedRowIndex, isCont) {
             }
             currentRowIndex = rowIdx;
             
-            // Zaznacz wizualnie wiersz
-            sheet.getCell(currentRowIndex, 0).select();
+            // Zaznacz wizualnie komórkę (w tej samej kolumnie)
+            sheet.getCell(currentRowIndex, currentColumnIndex).select();
             
             // Pobieramy cały wiersz (do 250 kolumn), co zmniejsza liczbę requestów.
             const rowRange = sheet.getRangeByIndexes(currentRowIndex, 0, 1, 250).load("values");
@@ -427,7 +429,7 @@ async function fetchRowData(forcedRowIndex, isCont) {
     }
 }
 
-document.getElementById("btn-to-machine").onclick = () => {
+function handleToMachineClick() {
     if (isContinuing && lastIntervalUnexpected) {
         document.getElementById("data-card").classList.add("hidden");
         document.getElementById("unexpected-card").classList.remove("hidden");
@@ -435,7 +437,7 @@ document.getElementById("btn-to-machine").onclick = () => {
         resumeUnexpected = false;
         showMachineSelection();
     }
-};
+}
 
 document.getElementById("btn-unexp-finished").onclick = async () => {
     resumeUnexpected = false;
@@ -496,7 +498,7 @@ async function showMachineSelection() {
     }
 }
 
-document.getElementById("btn-start-timer").onclick = () => {
+function handleStartTimerClick() {
     const machine = document.getElementById("sel-machine").value;
     
     // Weryfikacja innej otwartej pracy na tej samej maszynie
@@ -510,7 +512,7 @@ document.getElementById("btn-start-timer").onclick = () => {
         }
     }
     writeStartTime();
-};
+}
 
 document.getElementById("btn-mach-warn-continue").onclick = () => {
     document.getElementById("machine-warning-card").classList.add("hidden");
