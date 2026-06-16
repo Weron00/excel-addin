@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-width=1.0">
     <title>Nakładka Sekwencji - Część 5</title>
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-    <link rel="stylesheet" href="styles.css?v=11">
+    <link rel="stylesheet" href="styles.css?v=12">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -144,6 +144,15 @@
             </div>
         </div>
 
+        <div id="machine-warning-card" class="card hidden">
+            <h3 style="color:#dc2626; font-size:15px; margin-bottom:8px;">Uwaga! Zajęta maszyna</h3>
+            <p id="machine-warning-text" style="font-size:13px; margin-bottom:16px; color:#4b5563;">...</p>
+            <div style="display:flex; flex-direction:column; gap:8px;">
+                <button id="btn-mach-warn-continue" class="btn-primary" style="background:#dc2626; border-color:#dc2626;">Mimo to rozpocznij</button>
+                <button id="btn-mach-warn-cancel" class="btn-secondary">Anuluj</button>
+            </div>
+        </div>
+
         <div id="unexpected-card" class="card hidden">
             <h3 style="color:#dc2626; font-size:15px; margin-bottom:8px;">Nieoczekiwane zamknięcie!</h3>
             <p style="font-size:13px; margin-bottom:16px; color:#4b5563;">Ostatni proces nie został poprawnie zakończony przyciskiem. Co się stało?</p>
@@ -156,6 +165,6 @@
         
         <div id="status-message" class="status">Ładowanie...</div>
     </div>
-    <script src="app.js?v=11"></script>
+    <script src="app.js?v=12"></script>
 </body>
 </html>

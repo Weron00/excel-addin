@@ -293,6 +293,9 @@ async function fetchRowData(forcedRowIndex, isCont) {
             }
             currentRowIndex = rowIdx;
             
+            // Zaznacz wizualnie wiersz
+            sheet.getCell(currentRowIndex, 0).select();
+            
             // Pobieramy cały wiersz (do 250 kolumn), co zmniejsza liczbę requestów.
             const rowRange = sheet.getRangeByIndexes(currentRowIndex, 0, 1, 250).load("values");
             await context.sync();
@@ -306,6 +309,14 @@ async function fetchRowData(forcedRowIndex, isCont) {
             }
             const valAA = vals[colMap.startGlobal] ? vals[colMap.startGlobal].toString().trim() : "";
             isContinuing = (valAA !== "");
+            
+            if (isContinuing) {
+                document.getElementById("btn-prev-row").style.display = "none";
+                document.getElementById("btn-next-row").style.display = "none";
+            } else {
+                document.getElementById("btn-prev-row").style.display = "block";
+                document.getElementById("btn-next-row").style.display = "block";
+            }
             
             document.getElementById("val-item").innerText = vals[colMap.item] || "-";
             document.getElementById("val-rev").innerText = vals[colMap.rev] || "-";
@@ -335,7 +346,9 @@ async function fetchRowData(forcedRowIndex, isCont) {
             lastIntervalIndex = -1;
             unexpectedIntervalDuration = 0;
             
+            
             if (colMap.intervalsStart !== undefined) {
+                const intervalsStartStatus = vals[colMap.intervalsStart] ? vals[colMap.intervalsStart].toString().trim() : "";
                 for (let i = 0; i < 10; i++) {
                     const startIdx = colMap.intervalsStart + 1 + (i * 6) + 4;
                     const stopIdx = colMap.intervalsStart + 1 + (i * 6) + 5;
@@ -348,12 +361,6 @@ async function fetchRowData(forcedRowIndex, isCont) {
                         lastIntervalIndex = i;
                         const rls = vals[rlsIdx];
                         if (rls) lastDeclaredRolls = rls;
-                        
-                        if (stopStr === "" || !stopStr.includes("ZAMKNIĘTO")) {
-                            lastIntervalUnexpected = true;
-                        } else {
-                            lastIntervalUnexpected = false;
-                        }
                     }
                     
                     if (startStr && stopStr) {
@@ -362,12 +369,27 @@ async function fetchRowData(forcedRowIndex, isCont) {
                         if (!isNaN(tStart) && !isNaN(tStop)) {
                             const durationMs = tStop - tStart;
                             if (durationMs > 0) {
-                                if (i === lastIntervalIndex && lastIntervalUnexpected) {
-                                    unexpectedIntervalDuration = Math.floor(durationMs / 1000);
-                                }
                                 previousTotalGrossSeconds += Math.floor(durationMs / 1000);
                             }
                         }
+                    }
+                }
+                
+                if (lastIntervalIndex >= 0) {
+                    if (intervalsStartStatus !== "ZAMKNIĘTO") {
+                        lastIntervalUnexpected = true;
+                        // Odejmujemy czas tego przedziału od zsumowanego gross
+                        const uStartStr = vals[colMap.intervalsStart + 1 + (lastIntervalIndex * 6) + 4] ? vals[colMap.intervalsStart + 1 + (lastIntervalIndex * 6) + 4].toString().replace(/^'/, "") : "";
+                        const uStopStr = vals[colMap.intervalsStart + 1 + (lastIntervalIndex * 6) + 5] ? vals[colMap.intervalsStart + 1 + (lastIntervalIndex * 6) + 5].toString().replace(/^'/, "") : "";
+                        if (uStartStr && uStopStr) {
+                            const tuStart = parseCustomDate(uStartStr);
+                            const tuStop = parseCustomDate(uStopStr);
+                            if (!isNaN(tuStart) && !isNaN(tuStop) && (tuStop - tuStart > 0)) {
+                                unexpectedIntervalDuration = Math.floor((tuStop - tuStart) / 1000);
+                            }
+                        }
+                    } else {
+                        lastIntervalUnexpected = false;
                     }
                 }
             }
@@ -420,12 +442,7 @@ document.getElementById("btn-unexp-finished").onclick = async () => {
     try {
         await Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
-            const stopCol = colMap.intervalsStart + 1 + lastIntervalIndex * 6 + 5;
-            const stopCell = sheet.getCell(currentRowIndex, stopCol).load("values");
-            await ctx.sync();
-            let stopVal = stopCell.values[0][0] ? stopCell.values[0][0].toString() : getFormattedDate();
-            if (!stopVal.includes("ZAMKNIĘTO")) stopVal += " ZAMKNIĘTO";
-            sheet.getCell(currentRowIndex, stopCol).values = [[safeStr(stopVal)]];
+            sheet.getCell(currentRowIndex, colMap.intervalsStart).values = [["ZAMKNIĘTO"]];
             await ctx.sync();
         });
         document.getElementById("unexpected-card").classList.add("hidden");
@@ -479,6 +496,32 @@ async function showMachineSelection() {
     }
 }
 
+document.getElementById("btn-start-timer").onclick = () => {
+    const machine = document.getElementById("sel-machine").value;
+    
+    // Weryfikacja innej otwartej pracy na tej samej maszynie
+    if (window.unfinishedMachines && window.unfinishedMachines[machine]) {
+        const unfin = window.unfinishedMachines[machine];
+        if (unfin.row !== currentRowIndex) {
+            document.getElementById("machine-warning-text").innerText = `Na maszynie ${machine} znajduje się już niezakończony produkt (Wiersz ${unfin.row + 1}: Item ${unfin.item}).\n\nCzy na pewno chcesz rozpocząć nowe cięcie na tej maszynie?`;
+            document.getElementById("machine-card").classList.add("hidden");
+            document.getElementById("machine-warning-card").classList.remove("hidden");
+            return;
+        }
+    }
+    writeStartTime();
+};
+
+document.getElementById("btn-mach-warn-continue").onclick = () => {
+    document.getElementById("machine-warning-card").classList.add("hidden");
+    writeStartTime();
+};
+
+document.getElementById("btn-mach-warn-cancel").onclick = () => {
+    document.getElementById("machine-warning-card").classList.add("hidden");
+    document.getElementById("machine-card").classList.remove("hidden");
+};
+
 async function writeStartTime() {
     const operator = document.getElementById("in-operator").value.trim() || "Brak";
     startWorkersCount = parseInt(document.getElementById("in-workers").value) || 4;
@@ -487,15 +530,6 @@ async function writeStartTime() {
     
     const realRolls = document.getElementById("in-real-rolls").value;
     const machine = document.getElementById("sel-machine").value;
-    
-    // Weryfikacja innej otwartej pracy na tej samej maszynie
-    if (window.unfinishedMachines && window.unfinishedMachines[machine]) {
-        const unfin = window.unfinishedMachines[machine];
-        if (unfin.row !== currentRowIndex) {
-            const conf = confirm(`UWAGA!\nNa maszynie ${machine} znajduje się już niezakończony produkt (Wiersz ${unfin.row + 1}: Item ${unfin.item}).\n\nCzy na pewno chcesz rozpocząć nowe cięcie na tej maszynie?`);
-            if (!conf) return;
-        }
-    }
     
     try {
         setStatus("Rozpoczynanie...");
@@ -524,6 +558,7 @@ async function writeStartTime() {
                 sheet.getCell(currentRowIndex, colMap.startGlobal).values = [[safeStr(dateStr)]];
             }
             sheet.getCell(currentRowIndex, colMap.machine).values = [[machine]];
+            sheet.getCell(currentRowIndex, colMap.intervalsStart).values = [[""]]; // Wyczyszczenie ZAMKNIĘTO
             
             // Znajdowanie przedziału
             if (resumeUnexpected && lastIntervalIndex >= 0) {
@@ -751,7 +786,7 @@ async function confirmChangeRolls() {
             const dateStr = getFormattedDate();
             
             // Koniec starego
-            sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[safeStr(dateStr + " ZAMKNIĘTO")]];
+            sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[safeStr(dateStr)]];
             
             // Ustal nowy index przedziału
             currentIntervalIndex++;
@@ -821,8 +856,11 @@ async function saveIncidents(fullComplete) {
             const dateStr = getFormattedDate();
             
             if (currentIntervalStartCol !== -1) {
-                sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[safeStr(dateStr + " ZAMKNIĘTO")]]; // Stop Time
+                sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[safeStr(dateStr)]]; // Stop Time
             }
+            
+            // Oznaczenie poprawnego zamknięcia sesji
+            sheet.getCell(currentRowIndex, colMap.intervalsStart).values = [["ZAMKNIĘTO"]];
             
             if (fullComplete) {
                 sheet.getCell(currentRowIndex, colMap.endGlobal).values = [[safeStr(dateStr)]];
