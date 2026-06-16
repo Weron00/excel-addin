@@ -104,8 +104,16 @@ function getFormattedDate() {
     return `${day}-${mo}-${y} ${h}:${m}`;
 }
 
-function parseCustomDate(str) {
-    if (!str) return NaN;
+function parseCustomDate(val) {
+    if (val === undefined || val === null || val === "") return NaN;
+    const str = val.toString().trim().replace(/^'/, "");
+    
+    // Obsługa numerycznych dat i czasu bezpośrednio z Excela
+    if (!isNaN(parseFloat(str)) && !str.includes("-") && !str.includes(":")) {
+        const num = parseFloat(str);
+        return new Date(1899, 11, 30).getTime() + Math.round(num * 86400 * 1000);
+    }
+    
     const parts = str.split(" ");
     if (parts.length < 2) return NaN;
     const dateParts = parts[0].split("-");
@@ -295,9 +303,6 @@ async function fetchRowData(forcedRowIndex, isCont) {
             }
             currentRowIndex = rowIdx;
             
-            // Zaznacz wizualnie komórkę (w tej samej kolumnie)
-            sheet.getCell(currentRowIndex, currentColumnIndex).select();
-            
             // Pobieramy cały wiersz (do 250 kolumn), co zmniejsza liczbę requestów.
             const rowRange = sheet.getRangeByIndexes(currentRowIndex, 0, 1, 250).load("values");
             await context.sync();
@@ -316,6 +321,7 @@ async function fetchRowData(forcedRowIndex, isCont) {
                 document.getElementById("btn-prev-row").style.display = "none";
                 document.getElementById("btn-next-row").style.display = "none";
             } else {
+                sheet.getCell(currentRowIndex, currentColumnIndex).select();
                 document.getElementById("btn-prev-row").style.display = "block";
                 document.getElementById("btn-next-row").style.display = "block";
             }
@@ -457,7 +463,7 @@ document.getElementById("btn-unexp-finished").onclick = async () => {
 document.getElementById("btn-unexp-resume").onclick = () => {
     resumeUnexpected = true;
     document.getElementById("unexpected-card").classList.add("hidden");
-    showMachineSelection();
+    writeStartTime();
 };
 
 document.getElementById("btn-unexp-cancel").onclick = () => {
@@ -531,7 +537,11 @@ async function writeStartTime() {
     document.getElementById("val-current-workers").innerText = currentWorkersCount;
     
     const realRolls = document.getElementById("in-real-rolls").value;
-    const machine = document.getElementById("sel-machine").value;
+    let machine = document.getElementById("sel-machine").value;
+    
+    if (!machine && resumeUnexpected) {
+        machine = selectedMachineForContinuation;
+    }
     
     try {
         setStatus("Rozpoczynanie...");
