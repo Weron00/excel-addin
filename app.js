@@ -7,6 +7,10 @@ Office.onReady((info) => {
     document.getElementById("btn-save-partial").onclick = () => saveIncidents(false);
     document.getElementById("btn-save-full").onclick = () => saveIncidents(true);
     
+    // Nawigacja wierszami
+    document.getElementById("btn-prev-row").onclick = () => { if (currentRowIndex > 1) fetchRowData(currentRowIndex - 1, isContinuing); };
+    document.getElementById("btn-next-row").onclick = () => fetchRowData(currentRowIndex + 1, isContinuing);
+    
     // Zmiana rolek w trakcie
     document.getElementById("btn-change-rolls").onclick = () => {
         document.getElementById("change-rolls-panel").classList.remove("hidden");
@@ -60,6 +64,12 @@ let currentIntervalIndex = -1; // 0 do 9
 let currentIntervalStartCol = -1;
 let previousTotalGrossSeconds = 0;
 let theoreticalSeconds = 0;
+
+// Zamknięcia i kontynuacje
+let lastIntervalUnexpected = false;
+let lastIntervalIndex = -1;
+let unexpectedIntervalDuration = 0;
+let resumeUnexpected = false;
 
 // Pracownicy i operatorzy
 let currentWorkersCount = 4;
@@ -216,6 +226,7 @@ async function scanForUnfinished(context) {
     const listContainer = document.getElementById("unfinished-list");
     listContainer.innerHTML = "";
     let foundAny = false;
+    window.unfinishedMachines = {};
     
     for (let i = 0; i < range.values.length; i++) {
         const row = range.values[i];
@@ -227,6 +238,13 @@ async function scanForUnfinished(context) {
         if (valAA !== "" && valAB === "") {
             foundAny = true;
             const itemValue = (colMap.item !== undefined && row[colMap.item]) ? row[colMap.item].toString() : "Brak Itemu";
+            const machineVal = (colMap.machine !== undefined && row[colMap.machine]) ? row[colMap.machine].toString().trim() : "";
+            if (machineVal !== "") {
+                window.unfinishedMachines[machineVal] = {
+                    row: dataStartRowIndex + i,
+                    item: itemValue
+                };
+            }
             const btn = document.createElement("button");
             btn.className = "unfinished-item";
             btn.innerText = `Wiersz ${dataStartRowIndex + i + 1} | Item: ${itemValue}`;
@@ -268,27 +286,26 @@ async function fetchRowData(forcedRowIndex, isCont) {
                 const activeCell = context.workbook.getActiveCell().load("rowIndex");
                 await context.sync();
                 rowIdx = activeCell.rowIndex;
-                if (rowIdx < dataStartRowIndex) {
-                    setStatus("Wybrano wiersz nagłówkowy. Wybierz wiersz poniżej tytułów.");
-                    return;
-                }
-                const checkAA = sheet.getCell(rowIdx, colMap.startGlobal).load("values");
-                const checkAB = sheet.getCell(rowIdx, colMap.endGlobal).load("values");
-                await context.sync();
-                const valAA = checkAA.values[0][0] ? checkAA.values[0][0].toString().trim() : "";
-                const valAB = checkAB.values[0][0] ? checkAB.values[0][0].toString().trim() : "";
-                if (valAB !== "") {
-                    setStatus("UWAGA: Ten produkt został już całkowicie zakończony!");
-                    return;
-                }
-                if (valAA !== "") isContinuing = true;
+            }
+            if (rowIdx < dataStartRowIndex) {
+                setStatus("Wybierz wiersz poniżej tytułów.");
+                return;
             }
             currentRowIndex = rowIdx;
             
-            // Do 250 kolumn, żeby złapać przedziały
+            // Pobieramy cały wiersz (do 250 kolumn), co zmniejsza liczbę requestów.
             const rowRange = sheet.getRangeByIndexes(currentRowIndex, 0, 1, 250).load("values");
             await context.sync();
             const vals = rowRange.values[0];
+            
+            // Weryfikacja zakończenia
+            const valAB = vals[colMap.endGlobal] ? vals[colMap.endGlobal].toString().trim() : "";
+            if (valAB !== "") {
+                setStatus("UWAGA: Ten produkt został już całkowicie zakończony!");
+                return;
+            }
+            const valAA = vals[colMap.startGlobal] ? vals[colMap.startGlobal].toString().trim() : "";
+            isContinuing = (valAA !== "");
             
             document.getElementById("val-item").innerText = vals[colMap.item] || "-";
             document.getElementById("val-rev").innerText = vals[colMap.rev] || "-";
@@ -298,10 +315,9 @@ async function fetchRowData(forcedRowIndex, isCont) {
             document.getElementById("val-warstwy").innerText = vals[colMap.maxRolls] || "-";
             document.getElementById("val-kpl").innerText = vals[colMap.expLayers] || "0";
             
-            document.getElementById("in-real-rolls").value = vals[colMap.maxRolls] || "";
+            let lastDeclaredRolls = vals[colMap.maxRolls] || "";
             document.getElementById("in-operator").value = "";
             document.getElementById("in-workers").value = "4";
-            updateKitsCalc();
             
             selectedMachineForContinuation = vals[colMap.machine] ? vals[colMap.machine].toString() : "";
             currentWorkerGlobalString = vals[colMap.workers] ? vals[colMap.workers].toString() : "";
@@ -313,24 +329,51 @@ async function fetchRowData(forcedRowIndex, isCont) {
             document.getElementById("in-other-incidents").value = existingNotes;
             document.getElementById("in-running-notes").value = existingNotes;
             
-            // Obliczamy wcześniejsze czasy z przedziałów
+            // Obliczamy wcześniejsze czasy z przedziałów i skanujemy pod kątem przerwanych
             previousTotalGrossSeconds = 0;
+            lastIntervalUnexpected = false;
+            lastIntervalIndex = -1;
+            unexpectedIntervalDuration = 0;
+            
             if (colMap.intervalsStart !== undefined) {
                 for (let i = 0; i < 10; i++) {
                     const startIdx = colMap.intervalsStart + 1 + (i * 6) + 4;
                     const stopIdx = colMap.intervalsStart + 1 + (i * 6) + 5;
+                    const rlsIdx = colMap.intervalsStart + 1 + (i * 6) + 3;
+                    
                     const startStr = vals[startIdx] ? vals[startIdx].toString().replace(/^'/, "") : "";
                     const stopStr = vals[stopIdx] ? vals[stopIdx].toString().replace(/^'/, "") : "";
+                    
+                    if (startStr) {
+                        lastIntervalIndex = i;
+                        const rls = vals[rlsIdx];
+                        if (rls) lastDeclaredRolls = rls;
+                        
+                        if (stopStr === "" || !stopStr.includes("ZAMKNIĘTO")) {
+                            lastIntervalUnexpected = true;
+                        } else {
+                            lastIntervalUnexpected = false;
+                        }
+                    }
+                    
                     if (startStr && stopStr) {
                         const tStart = parseCustomDate(startStr);
                         const tStop = parseCustomDate(stopStr);
                         if (!isNaN(tStart) && !isNaN(tStop)) {
                             const durationMs = tStop - tStart;
-                            if (durationMs > 0) previousTotalGrossSeconds += Math.floor(durationMs / 1000);
+                            if (durationMs > 0) {
+                                if (i === lastIntervalIndex && lastIntervalUnexpected) {
+                                    unexpectedIntervalDuration = Math.floor(durationMs / 1000);
+                                }
+                                previousTotalGrossSeconds += Math.floor(durationMs / 1000);
+                            }
                         }
                     }
                 }
             }
+            
+            document.getElementById("in-real-rolls").value = lastDeclaredRolls;
+            updateKitsCalc();
             
             theoreticalSeconds = 0;
             if (colMap.theoretical !== undefined) {
@@ -361,6 +404,47 @@ async function fetchRowData(forcedRowIndex, isCont) {
         setStatus("Błąd pobierania: " + error.message);
     }
 }
+
+document.getElementById("btn-to-machine").onclick = () => {
+    if (isContinuing && lastIntervalUnexpected) {
+        document.getElementById("data-card").classList.add("hidden");
+        document.getElementById("unexpected-card").classList.remove("hidden");
+    } else {
+        resumeUnexpected = false;
+        showMachineSelection();
+    }
+};
+
+document.getElementById("btn-unexp-finished").onclick = async () => {
+    resumeUnexpected = false;
+    try {
+        await Excel.run(async (ctx) => {
+            const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+            const stopCol = colMap.intervalsStart + 1 + lastIntervalIndex * 6 + 5;
+            const stopCell = sheet.getCell(currentRowIndex, stopCol).load("values");
+            await ctx.sync();
+            let stopVal = stopCell.values[0][0] ? stopCell.values[0][0].toString() : getFormattedDate();
+            if (!stopVal.includes("ZAMKNIĘTO")) stopVal += " ZAMKNIĘTO";
+            sheet.getCell(currentRowIndex, stopCol).values = [[safeStr(stopVal)]];
+            await ctx.sync();
+        });
+        document.getElementById("unexpected-card").classList.add("hidden");
+        showMachineSelection();
+    } catch (e) {
+        setStatus("Błąd dopisywania ZAMKNIĘTO: " + e.message);
+    }
+};
+
+document.getElementById("btn-unexp-resume").onclick = () => {
+    resumeUnexpected = true;
+    document.getElementById("unexpected-card").classList.add("hidden");
+    showMachineSelection();
+};
+
+document.getElementById("btn-unexp-cancel").onclick = () => {
+    document.getElementById("unexpected-card").classList.add("hidden");
+    document.getElementById("initial-card").classList.remove("hidden");
+};
 
 async function showMachineSelection() {
     try {
@@ -404,6 +488,15 @@ async function writeStartTime() {
     const realRolls = document.getElementById("in-real-rolls").value;
     const machine = document.getElementById("sel-machine").value;
     
+    // Weryfikacja innej otwartej pracy na tej samej maszynie
+    if (window.unfinishedMachines && window.unfinishedMachines[machine]) {
+        const unfin = window.unfinishedMachines[machine];
+        if (unfin.row !== currentRowIndex) {
+            const conf = confirm(`UWAGA!\nNa maszynie ${machine} znajduje się już niezakończony produkt (Wiersz ${unfin.row + 1}: Item ${unfin.item}).\n\nCzy na pewno chcesz rozpocząć nowe cięcie na tej maszynie?`);
+            if (!conf) return;
+        }
+    }
+    
     try {
         setStatus("Rozpoczynanie...");
         await Excel.run(async (context) => {
@@ -433,26 +526,50 @@ async function writeStartTime() {
             sheet.getCell(currentRowIndex, colMap.machine).values = [[machine]];
             
             // Znajdowanie przedziału
-            const intervalsRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 60).load("values");
-            await context.sync();
-            
-            currentIntervalIndex = 9; // domyślnie ostatni jeśli wszystkie zajęte
-            for (let i = 0; i < 10; i++) {
-                const startCellVal = intervalsRange.values[0][i * 6 + 4] ? intervalsRange.values[0][i * 6 + 4].toString().trim() : "";
-                if (startCellVal === "") {
-                    currentIntervalIndex = i;
-                    break;
+            if (resumeUnexpected && lastIntervalIndex >= 0) {
+                currentIntervalIndex = lastIntervalIndex;
+                currentIntervalStartCol = colMap.intervalsStart + 1 + (currentIntervalIndex * 6);
+                
+                // Read Start Time to calculate secondsElapsed accurately
+                const startCell = sheet.getCell(currentRowIndex, currentIntervalStartCol + 4).load("values");
+                await context.sync();
+                const sVal = startCell.values[0][0] ? startCell.values[0][0].toString().replace(/^'/, "") : getFormattedDate();
+                const tStart = parseCustomDate(sVal);
+                if (!isNaN(tStart)) {
+                    secondsElapsed = Math.floor((new Date().getTime() - tStart) / 1000);
+                    if (secondsElapsed < 0) secondsElapsed = 0;
+                } else {
+                    secondsElapsed = 0;
                 }
+                
+                // Odejmujemy czas nieoczekiwanego zamknięcia z previousTotalGrossSeconds, żeby nie policzyć go podwójnie!
+                previousTotalGrossSeconds -= unexpectedIntervalDuration;
+                if (previousTotalGrossSeconds < 0) previousTotalGrossSeconds = 0;
+                
+            } else {
+                const intervalsRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 60).load("values");
+                await context.sync();
+                
+                currentIntervalIndex = 9; // domyślnie ostatni jeśli wszystkie zajęte
+                for (let i = 0; i < 10; i++) {
+                    const startCellVal = intervalsRange.values[0][i * 6 + 4] ? intervalsRange.values[0][i * 6 + 4].toString().trim() : "";
+                    if (startCellVal === "") {
+                        currentIntervalIndex = i;
+                        break;
+                    }
+                }
+                currentIntervalStartCol = colMap.intervalsStart + 1 + (currentIntervalIndex * 6);
+                sheet.getCell(currentRowIndex, currentIntervalStartCol + 4).values = [[safeStr(dateStr)]];
+                secondsElapsed = 0;
             }
-            
-            currentIntervalStartCol = colMap.intervalsStart + 1 + (currentIntervalIndex * 6);
             
             // Zapis przedziału (Operator, Pracownicy Start, Pracownicy End (na razie = Start), Rolki, Start, Puste)
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 0).values = [[operator]];
-            sheet.getCell(currentRowIndex, currentIntervalStartCol + 1).values = [[startWorkersCount]];
+            if (!resumeUnexpected) {
+                sheet.getCell(currentRowIndex, currentIntervalStartCol + 1).values = [[startWorkersCount]];
+            }
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 2).values = [[currentWorkersCount]];
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 3).values = [[realRolls]];
-            sheet.getCell(currentRowIndex, currentIntervalStartCol + 4).values = [[safeStr(dateStr)]];
             await context.sync();
             
             const iTxt = document.getElementById("val-item").innerText;
@@ -477,7 +594,7 @@ async function writeStartTime() {
 }
 
 function startTimer() {
-    secondsElapsed = 0;
+    if (!resumeUnexpected) secondsElapsed = 0;
     updateTimerDisplay();
     timerInterval = setInterval(() => {
         secondsElapsed++;
@@ -634,7 +751,7 @@ async function confirmChangeRolls() {
             const dateStr = getFormattedDate();
             
             // Koniec starego
-            sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[safeStr(dateStr)]];
+            sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[safeStr(dateStr + " ZAMKNIĘTO")]];
             
             // Ustal nowy index przedziału
             currentIntervalIndex++;
@@ -704,7 +821,7 @@ async function saveIncidents(fullComplete) {
             const dateStr = getFormattedDate();
             
             if (currentIntervalStartCol !== -1) {
-                sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[safeStr(dateStr)]]; // Stop Time
+                sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[safeStr(dateStr + " ZAMKNIĘTO")]]; // Stop Time
             }
             
             if (fullComplete) {

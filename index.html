@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-width=1.0">
     <title>Nakładka Sekwencji - Część 5</title>
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-    <link rel="stylesheet" href="styles.css?v=10">
+    <link rel="stylesheet" href="styles.css?v=11">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -57,7 +57,11 @@
             <div class="actions">
                 <button id="btn-to-machine" class="btn-action start">DALEJ</button>
             </div>
-            <button id="btn-cancel-data" class="btn-secondary" style="margin-top:8px;">Anuluj</button>
+            <div style="display:flex; justify-content:space-between; margin-top:8px;">
+                <button id="btn-cancel-data" class="btn-secondary" style="flex:1; margin-right:4px;">Anuluj</button>
+                <button id="btn-prev-row" class="btn-secondary" style="flex:1; margin-left:4px; margin-right:4px;">&#8593; Wyżej</button>
+                <button id="btn-next-row" class="btn-secondary" style="flex:1; margin-left:4px;">&#8595; Niżej</button>
+            </div>
         </div>
 
         <div id="machine-card" class="card hidden">
@@ -139,9 +143,19 @@
                 <button id="btn-save-full" class="btn-primary">Zakończ całkowicie Produkt</button>
             </div>
         </div>
+
+        <div id="unexpected-card" class="card hidden">
+            <h3 style="color:#dc2626; font-size:15px; margin-bottom:8px;">Nieoczekiwane zamknięcie!</h3>
+            <p style="font-size:13px; margin-bottom:16px; color:#4b5563;">Ostatni proces nie został poprawnie zakończony przyciskiem. Co się stało?</p>
+            <div style="display:flex; flex-direction:column; gap:8px;">
+                <button id="btn-unexp-finished" class="btn-primary" style="background:#4b5563; border-color:#4b5563;">Zakończyłem wtedy pracę (zamknij stary przedział)</button>
+                <button id="btn-unexp-resume" class="btn-primary" style="background:#2563eb;">Zamknąłem przypadkiem (wznów licznik)</button>
+            </div>
+            <button id="btn-unexp-cancel" class="btn-secondary" style="margin-top:16px;">Anuluj</button>
+        </div>
         
         <div id="status-message" class="status">Ładowanie...</div>
     </div>
-    <script src="app.js?v=10"></script>
+    <script src="app.js?v=11"></script>
 </body>
 </html>
