@@ -527,8 +527,7 @@ document.getElementById("btn-mach-warn-continue").onclick = () => {
 };
 
 document.getElementById("btn-mach-warn-cancel").onclick = () => {
-    document.getElementById("machine-warning-card").classList.add("hidden");
-    document.getElementById("machine-card").classList.remove("hidden");
+    resetUI();
 };
 
 async function writeStartTime() {
