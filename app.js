@@ -1009,6 +1009,8 @@ function resetUI() {
     document.getElementById("machine-card").classList.add("hidden");
     document.getElementById("running-card").classList.add("hidden");
     document.getElementById("incidents-card").classList.add("hidden");
+    document.getElementById("machine-warning-card").classList.add("hidden");
+    document.getElementById("unexpected-card").classList.add("hidden");
     document.getElementById("initial-card").classList.remove("hidden");
 }
 
