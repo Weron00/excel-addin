@@ -291,11 +291,12 @@ async function fetchRowData(forcedRowIndex, isCont) {
             activeSheetName = sheet.name; 
             
             let rowIdx = forcedRowIndex;
+            const activeCell = context.workbook.getActiveCell().load(["rowIndex", "columnIndex"]);
+            await context.sync();
+            currentColumnIndex = activeCell.columnIndex;
+            
             if (rowIdx === null) {
-                const activeCell = context.workbook.getActiveCell().load(["rowIndex", "columnIndex"]);
-                await context.sync();
                 rowIdx = activeCell.rowIndex;
-                currentColumnIndex = activeCell.columnIndex;
             }
             if (rowIdx < dataStartRowIndex) {
                 setStatus("Wybierz wiersz poniżej tytułów.");
@@ -550,21 +551,23 @@ async function writeStartTime() {
             const dateStr = getFormattedDate();
             
             // Global Strings Updates
-            if (currentOperatorGlobalString === "") {
-                currentOperatorGlobalString = operator;
-            } else {
-                currentOperatorGlobalString += "/" + operator;
+            if (!resumeUnexpected) {
+                if (currentOperatorGlobalString === "") {
+                    currentOperatorGlobalString = operator;
+                } else {
+                    currentOperatorGlobalString += "/" + operator;
+                }
+                
+                intervalWorkerDiff = 0; // reset różnicy dla nowego przedziału
+                if (previousGlobalWorkerString === "") {
+                    currentWorkerGlobalString = startWorkersCount.toString();
+                } else {
+                    currentWorkerGlobalString = previousGlobalWorkerString + "/" + startWorkersCount.toString();
+                }
+                
+                sheet.getCell(currentRowIndex, colMap.operator).values = [[safeStr(currentOperatorGlobalString)]];
+                sheet.getCell(currentRowIndex, colMap.workers).values = [[safeStr(currentWorkerGlobalString)]];
             }
-            
-            intervalWorkerDiff = 0; // reset różnicy dla nowego przedziału
-            if (previousGlobalWorkerString === "") {
-                currentWorkerGlobalString = startWorkersCount.toString();
-            } else {
-                currentWorkerGlobalString = previousGlobalWorkerString + "/" + startWorkersCount.toString();
-            }
-            
-            sheet.getCell(currentRowIndex, colMap.operator).values = [[safeStr(currentOperatorGlobalString)]];
-            sheet.getCell(currentRowIndex, colMap.workers).values = [[safeStr(currentWorkerGlobalString)]];
             
             if (!isContinuing) {
                 sheet.getCell(currentRowIndex, colMap.startGlobal).values = [[safeStr(dateStr)]];
