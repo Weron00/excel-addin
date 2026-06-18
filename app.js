@@ -451,7 +451,9 @@ document.getElementById("btn-unexp-finished").onclick = async () => {
     try {
         await Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+            sheet.protection.unprotect("ShortP26");
             sheet.getCell(currentRowIndex, colMap.intervalsStart).values = [["ZAMKNIĘTO"]];
+            sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
             await ctx.sync();
         });
         document.getElementById("unexpected-card").classList.add("hidden");
@@ -547,6 +549,7 @@ async function writeStartTime() {
         setStatus("Rozpoczynanie...");
         await Excel.run(async (context) => {
             const sheet = context.workbook.worksheets.getItem(activeSheetName);
+            sheet.protection.unprotect("ShortP26");
             const dateStr = getFormattedDate();
             
             // Global Strings Updates
@@ -619,6 +622,7 @@ async function writeStartTime() {
             }
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 2).values = [[currentWorkersCount]];
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 3).values = [[realRolls]];
+            sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
             await context.sync();
             
             const iTxt = document.getElementById("val-item").innerText;
@@ -652,7 +656,13 @@ function startTimer() {
 }
 
 function updateTimerDisplay() {
-    document.getElementById("timer").innerText = secondsToHms(secondsElapsed);
+    let currentTotalNetSeconds = previousTotalGrossSeconds + secondsElapsed - totalAwariaSecondsGlobal;
+    if (isAwariaActive) {
+        currentTotalNetSeconds -= awariaSecondsElapsed;
+    }
+    if (currentTotalNetSeconds < 0) currentTotalNetSeconds = 0;
+    
+    document.getElementById("timer").innerText = secondsToHms(currentTotalNetSeconds);
     
     let totalGrossSecondsForTarget = previousTotalGrossSeconds + secondsElapsed;
     
@@ -694,12 +704,14 @@ function startAutoSave() {
             try {
                 await Excel.run(async (ctx) => {
                     const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+                    sheet.protection.unprotect("ShortP26");
                     sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[safeStr(getFormattedDate())]];
                     
                     if (colMap.notes !== undefined) {
                         const notesVal = document.getElementById("in-running-notes").value;
                         sheet.getCell(currentRowIndex, colMap.notes).values = [[notesVal]];
                     }
+                    sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
                     await ctx.sync();
                 });
             } catch (e) {
@@ -740,8 +752,10 @@ function adjustWorkers(amount) {
     // Auto update excel values (End workers + Global string)
     Excel.run(async (ctx) => {
         const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+        sheet.protection.unprotect("ShortP26");
         sheet.getCell(currentRowIndex, colMap.workers).values = [[safeStr(currentWorkerGlobalString)]];
         sheet.getCell(currentRowIndex, currentIntervalStartCol + 2).values = [[currentWorkersCount]];
+        sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
         await ctx.sync();
     }).catch(e => console.warn(e));
 }
@@ -777,7 +791,9 @@ function toggleAwaria() {
         // Zapisz sumę awarii do excela
         Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+            sheet.protection.unprotect("ShortP26");
             sheet.getCell(currentRowIndex, colMap.awarie).values = [[safeStr(secondsToHms(totalAwariaSecondsGlobal))]];
+            sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
             await ctx.sync();
         }).catch(e => console.warn(e));
     }
@@ -797,6 +813,7 @@ async function confirmChangeRolls() {
         setStatus("Zmiana rolek - zapis...");
         await Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+            sheet.protection.unprotect("ShortP26");
             const dateStr = getFormattedDate();
             
             // Koniec starego
@@ -818,6 +835,7 @@ async function confirmChangeRolls() {
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 2).values = [[currentWorkersCount]];
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 3).values = [[newRolls]];
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 4).values = [[safeStr(dateStr)]];
+            sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
             await ctx.sync();
             
             document.getElementById("in-real-rolls").value = newRolls;
@@ -867,6 +885,7 @@ async function saveIncidents(fullComplete) {
         setStatus("Zapisywanie...");
         await Excel.run(async (context) => {
             const sheet = context.workbook.worksheets.getItem(activeSheetName);
+            sheet.protection.unprotect("ShortP26");
             const dateStr = getFormattedDate();
             
             if (currentIntervalStartCol !== -1) {
@@ -981,6 +1000,7 @@ async function saveIncidents(fullComplete) {
             if (colMap.chkBreak !== undefined) sheet.getCell(currentRowIndex, colMap.chkBreak).values = [[breakTime ? "TAK" : ""]];
             if (colMap.notes !== undefined) sheet.getCell(currentRowIndex, colMap.notes).values = [[incidentsText]];
             
+            sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
             await context.sync();
             
             resetUI();
