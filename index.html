@@ -164,6 +164,67 @@
         </div>
         
         <div id="status-message" class="status">Ładowanie...</div>
+        
+        <!-- ADMIN MODULE -->
+        <button id="btn-admin-icon" style="position: absolute; bottom: 8px; right: 8px; background: transparent; border: none; cursor: pointer; opacity: 0.5; font-size: 16px;">⚙️</button>
+
+        <div id="admin-login-card" class="card hidden">
+            <h3 style="margin:0 0 12px 0; font-size:15px; color:#111827;">Tryb Administratora</h3>
+            <div class="input-group">
+                <label>Hasło Edycji</label>
+                <input type="password" id="in-admin-pwd" placeholder="Podaj hasło...">
+            </div>
+            <div style="display:flex; gap:8px; margin-top:16px;">
+                <button id="btn-admin-login" class="btn-primary" style="flex:1;">Zaloguj</button>
+                <button id="btn-admin-cancel" class="btn-secondary" style="flex:1;">Anuluj</button>
+            </div>
+        </div>
+
+        <div id="admin-menu-card" class="card hidden">
+            <h3 style="margin:0 0 12px 0; font-size:15px; color:#111827;">Menu Edycji</h3>
+            <button id="btn-admin-edit-start" class="btn-secondary" style="width:100%; margin-bottom:8px;">Edytuj Start pozycji</button>
+            <button id="btn-admin-edit-end" class="btn-secondary" style="width:100%; margin-bottom:8px;">Edytuj End pozycji</button>
+            <button id="btn-admin-edit-ops" class="btn-secondary" style="width:100%; margin-bottom:8px;">Edytuj Operatora / Pracowników</button>
+            <button id="btn-admin-del-one" class="btn-primary" style="width:100%; margin-bottom:8px; background:#dc2626; border-color:#dc2626;">Skasuj wpis</button>
+            <button id="btn-admin-del-multi" class="btn-primary" style="width:100%; margin-bottom:16px; background:#991b1b; border-color:#991b1b;">Skasuj kilka wpisów</button>
+            <button id="btn-admin-close" class="btn-secondary" style="width:100%;">Zamknij Menu</button>
+        </div>
+
+        <div id="admin-action-card" class="card hidden">
+            <h3 id="admin-action-title" style="margin:0 0 12px 0; font-size:15px; color:#111827;">Edycja</h3>
+            
+            <div id="admin-edit-time-wrap" class="hidden">
+                <div class="input-group">
+                    <label>Obecna wartość</label>
+                    <input type="text" id="admin-time-current" disabled style="background:#f3f4f6;">
+                </div>
+                <div class="input-group">
+                    <label>Nowa wartość (Format: DD-MM-YYYY HH:MM)</label>
+                    <input type="text" id="admin-time-new" placeholder="np. 19-06-2026 14:30">
+                </div>
+            </div>
+
+            <div id="admin-edit-ops-wrap" class="hidden">
+                <div class="input-group">
+                    <label>Operator (np. AB/CD)</label>
+                    <input type="text" id="admin-ops-operator">
+                </div>
+                <div class="input-group">
+                    <label>Pracownicy (np. 4/3+1)</label>
+                    <input type="text" id="admin-ops-workers">
+                </div>
+            </div>
+
+            <div id="admin-del-wrap" class="hidden">
+                <p id="admin-del-text" style="font-size:13px; color:#dc2626; font-weight:600;">Czy na pewno skasować zaznaczone wiersze?</p>
+            </div>
+
+            <div style="display:flex; gap:8px; margin-top:16px;">
+                <button id="btn-admin-save" class="btn-primary" style="flex:1;">Zapisz / Skasuj</button>
+                <button id="btn-admin-action-cancel" class="btn-secondary" style="flex:1;">Powrót</button>
+            </div>
+        </div>
+
     </div>
     <script src="app.js?v=13"></script>
 </body>

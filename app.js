@@ -94,24 +94,38 @@ function safeStr(val) {
     return "'" + val.toString();
 }
 
-function getFormattedDate() {
-    const d = new Date();
-    const day = d.getDate().toString().padStart(2, '0');
-    const mo = (d.getMonth() + 1).toString().padStart(2, '0');
-    const y = d.getFullYear();
-    const h = d.getHours().toString().padStart(2, '0');
-    const m = d.getMinutes().toString().padStart(2, '0');
-    return `${day}-${mo}-${y} ${h}:${m}`;
+function getExcelDateNumber(d = new Date()) {
+    const year = d.getFullYear();
+    const month = d.getMonth();
+    const day = d.getDate();
+    const hours = d.getHours();
+    const minutes = d.getMinutes();
+    const seconds = d.getSeconds();
+
+    const localAsUtc = Date.UTC(year, month, day, hours, minutes, seconds);
+    const excelEpochUtc = Date.UTC(1899, 11, 30, 0, 0, 0);
+
+    return (localAsUtc - excelEpochUtc) / (24 * 60 * 60 * 1000);
 }
 
 function parseCustomDate(val) {
     if (val === undefined || val === null || val === "") return NaN;
     const str = val.toString().trim().replace(/^'/, "");
     
-    // Obsługa numerycznych dat i czasu bezpośrednio z Excela
     if (!isNaN(parseFloat(str)) && !str.includes("-") && !str.includes(":")) {
         const num = parseFloat(str);
-        return new Date(1899, 11, 30).getTime() + Math.round(num * 86400 * 1000);
+        const excelEpochUtc = Date.UTC(1899, 11, 30, 0, 0, 0);
+        const localAsUtc = excelEpochUtc + (num * 24 * 60 * 60 * 1000);
+        const tempDate = new Date(localAsUtc);
+        
+        return new Date(
+            tempDate.getUTCFullYear(),
+            tempDate.getUTCMonth(),
+            tempDate.getUTCDate(),
+            tempDate.getUTCHours(),
+            tempDate.getUTCMinutes(),
+            Math.round(tempDate.getUTCSeconds())
+        ).getTime();
     }
     
     const parts = str.split(" ");
@@ -550,7 +564,7 @@ async function writeStartTime() {
         await Excel.run(async (context) => {
             const sheet = context.workbook.worksheets.getItem(activeSheetName);
             sheet.protection.unprotect("ShortP26");
-            const dateStr = getFormattedDate();
+            const dateNum = getExcelDateNumber();
             
             // Global Strings Updates
             if (!resumeUnexpected) {
@@ -572,7 +586,7 @@ async function writeStartTime() {
             }
             
             if (!isContinuing) {
-                sheet.getCell(currentRowIndex, colMap.startGlobal).values = [[safeStr(dateStr)]];
+                sheet.getCell(currentRowIndex, colMap.startGlobal).values = [[dateNum]];
             }
             sheet.getCell(currentRowIndex, colMap.machine).values = [[machine]];
             sheet.getCell(currentRowIndex, colMap.intervalsStart).values = [[""]]; // Wyczyszczenie ZAMKNIĘTO
@@ -585,7 +599,7 @@ async function writeStartTime() {
                 // Read Start Time to calculate secondsElapsed accurately
                 const startCell = sheet.getCell(currentRowIndex, currentIntervalStartCol + 4).load("values");
                 await context.sync();
-                const sVal = startCell.values[0][0] ? startCell.values[0][0].toString().replace(/^'/, "") : getFormattedDate();
+                const sVal = startCell.values[0][0] ? startCell.values[0][0].toString().replace(/^'/, "") : dateNum;
                 const tStart = parseCustomDate(sVal);
                 if (!isNaN(tStart)) {
                     secondsElapsed = Math.floor((new Date().getTime() - tStart) / 1000);
@@ -611,7 +625,9 @@ async function writeStartTime() {
                     }
                 }
                 currentIntervalStartCol = colMap.intervalsStart + 1 + (currentIntervalIndex * 6);
-                sheet.getCell(currentRowIndex, currentIntervalStartCol + 4).values = [[safeStr(dateStr)]];
+                const startIntCell = sheet.getCell(currentRowIndex, currentIntervalStartCol + 4);
+                startIntCell.values = [[dateNum]];
+                startIntCell.numberFormat = [["yyyy-mm-dd hh:mm"]];
                 secondsElapsed = 0;
             }
             
@@ -705,7 +721,9 @@ function startAutoSave() {
                 await Excel.run(async (ctx) => {
                     const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
                     sheet.protection.unprotect("ShortP26");
-                    sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[safeStr(getFormattedDate())]];
+                    const autoSaveCell = sheet.getCell(currentRowIndex, currentIntervalStartCol + 5);
+                    autoSaveCell.values = [[getExcelDateNumber()]];
+                    autoSaveCell.numberFormat = [["yyyy-mm-dd hh:mm"]];
                     
                     if (colMap.notes !== undefined) {
                         const notesVal = document.getElementById("in-running-notes").value;
@@ -814,10 +832,12 @@ async function confirmChangeRolls() {
         await Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
             sheet.protection.unprotect("ShortP26");
-            const dateStr = getFormattedDate();
+            const dateNum = getExcelDateNumber();
             
             // Koniec starego
-            sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[safeStr(dateStr)]];
+            const oldEnd = sheet.getCell(currentRowIndex, currentIntervalStartCol + 5);
+            oldEnd.values = [[dateNum]];
+            oldEnd.numberFormat = [["yyyy-mm-dd hh:mm"]];
             
             // Ustal nowy index przedziału
             currentIntervalIndex++;
@@ -834,7 +854,9 @@ async function confirmChangeRolls() {
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 1).values = [[currentWorkersCount]];
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 2).values = [[currentWorkersCount]];
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 3).values = [[newRolls]];
-            sheet.getCell(currentRowIndex, currentIntervalStartCol + 4).values = [[safeStr(dateStr)]];
+            const newStart = sheet.getCell(currentRowIndex, currentIntervalStartCol + 4);
+            newStart.values = [[dateNum]];
+            newStart.numberFormat = [["yyyy-mm-dd hh:mm"]];
             sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
             await ctx.sync();
             
@@ -886,17 +908,19 @@ async function saveIncidents(fullComplete) {
         await Excel.run(async (context) => {
             const sheet = context.workbook.worksheets.getItem(activeSheetName);
             sheet.protection.unprotect("ShortP26");
-            const dateStr = getFormattedDate();
+            const dateNum = getExcelDateNumber();
             
             if (currentIntervalStartCol !== -1) {
-                sheet.getCell(currentRowIndex, currentIntervalStartCol + 5).values = [[safeStr(dateStr)]]; // Stop Time
+                const stopTimeCell = sheet.getCell(currentRowIndex, currentIntervalStartCol + 5);
+                stopTimeCell.values = [[dateNum]];
+                stopTimeCell.numberFormat = [["yyyy-mm-dd hh:mm"]];
             }
             
             // Oznaczenie poprawnego zamknięcia sesji
             sheet.getCell(currentRowIndex, colMap.intervalsStart).values = [["ZAMKNIĘTO"]];
             
             if (fullComplete) {
-                sheet.getCell(currentRowIndex, colMap.endGlobal).values = [[safeStr(dateStr)]];
+                sheet.getCell(currentRowIndex, colMap.endGlobal).values = [[dateNum]];
                 
                 // --- PODSUMOWANIE (3 kolumny na samym końcu przedziałów = intervalsStart + 60) ---
                 const dataRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 60).load("values");
@@ -1034,9 +1058,339 @@ function resetUI() {
     document.getElementById("initial-card").classList.remove("hidden");
 }
 
-function setStatus(message) {
-    const statusEl = document.getElementById("status-message");
-    if (statusEl) {
-        statusEl.innerText = message;
+function setS// --- ADMIN MODULE ---
+const adminPwd = "AdminIncoShort";
+let currentAdminAction = "";
+
+function hideAllAdminWraps() {
+    document.getElementById("admin-edit-time-wrap").classList.add("hidden");
+    document.getElementById("admin-edit-ops-wrap").classList.add("hidden");
+    document.getElementById("admin-del-wrap").classList.add("hidden");
+    document.getElementById("admin-time-new").value = "";
+    document.getElementById("admin-ops-operator").value = "";
+    document.getElementById("admin-ops-workers").value = "";
+}
+
+document.getElementById("btn-admin-icon").onclick = () => {
+    document.getElementById("initial-card").classList.add("hidden");
+    document.getElementById("data-card").classList.add("hidden");
+    document.getElementById("machine-card").classList.add("hidden");
+    document.getElementById("running-card").classList.add("hidden");
+    document.getElementById("incidents-card").classList.add("hidden");
+    
+    document.getElementById("admin-login-card").classList.remove("hidden");
+    document.getElementById("in-admin-pwd").value = "";
+    document.getElementById("in-admin-pwd").focus();
+};
+
+document.getElementById("btn-admin-cancel").onclick = () => {
+    resetUI();
+};
+
+document.getElementById("btn-admin-login").onclick = () => {
+    if (document.getElementById("in-admin-pwd").value === adminPwd) {
+        document.getElementById("admin-login-card").classList.add("hidden");
+        document.getElementById("admin-menu-card").classList.remove("hidden");
+    } else {
+        alert("Błędne hasło!");
+    }
+};
+
+document.getElementById("btn-admin-close").onclick = () => {
+    document.getElementById("admin-menu-card").classList.add("hidden");
+    resetUI();
+};
+
+document.getElementById("btn-admin-action-cancel").onclick = () => {
+    document.getElementById("admin-action-card").classList.add("hidden");
+    document.getElementById("admin-menu-card").classList.remove("hidden");
+};
+
+function dateToFormatString(d) {
+    if (!d || isNaN(d.getTime())) return "Brak";
+    const day = d.getDate().toString().padStart(2, '0');
+    const mo = (d.getMonth() + 1).toString().padStart(2, '0');
+    const y = d.getFullYear();
+    const h = d.getHours().toString().padStart(2, '0');
+    const m = d.getMinutes().toString().padStart(2, '0');
+    return `${day}-${mo}-${y} ${h}:${m}`;
+}
+
+function parseAdminDateStr(str) {
+    if (!str) return NaN;
+    const parts = str.trim().split(" ");
+    if (parts.length < 2) return NaN;
+    const dateParts = parts[0].split("-");
+    const timeParts = parts[1].split(":");
+    if (dateParts.length !== 3 || timeParts.length < 2) return NaN;
+    return new Date(+dateParts[2], (+dateParts[1]) - 1, +dateParts[0], +timeParts[0], +timeParts[1]);
+}
+
+async function recalculateRowSummary(ctx, sheet, rowIdx) {
+    const dataRange = sheet.getRangeByIndexes(rowIdx, colMap.intervalsStart + 1, 1, 60).load("values");
+    await ctx.sync();
+    
+    const ivals = dataRange.values[0];
+    let totalTimeMs = 0;
+    let sumWorkerTime = 0;
+    
+    for (let i = 0; i < 10; i++) {
+        const wStart = parseFloat(ivals[i*6 + 1]);
+        const wStop = parseFloat(ivals[i*6 + 2]);
+        const startStr = ivals[i*6 + 4] ? ivals[i*6 + 4].toString().replace(/^'/, "") : "";
+        const stopStr = ivals[i*6 + 5] ? ivals[i*6 + 5].toString().replace(/^'/, "") : "";
+        
+        if (startStr && stopStr) {
+            const tStart = parseCustomDate(startStr);
+            const tStop = parseCustomDate(stopStr);
+            if (!isNaN(tStart) && !isNaN(tStop)) {
+                const durationMs = tStop - tStart;
+                if (durationMs > 0) {
+                    totalTimeMs += durationMs;
+                    const avgWorkers = (isNaN(wStart) || isNaN(wStop)) ? 0 : ((wStart + wStop) / 2);
+                    sumWorkerTime += (avgWorkers * durationMs);
+                }
+            }
+        }
+    }
+    
+    const awariaCell = sheet.getCell(rowIdx, colMap.awarie).load("values");
+    await ctx.sync();
+    const awariaStr = awariaCell.values[0][0] ? awariaCell.values[0][0].toString() : "00:00:00";
+    const totalAwariaMs = hmsToSeconds(awariaStr) * 1000;
+    
+    let netTimeMs = totalTimeMs - totalAwariaMs;
+    if (netTimeMs < 0) netTimeMs = 0;
+    
+    let avgWorkersFinal = 0;
+    if (totalTimeMs > 0) {
+        avgWorkersFinal = sumWorkerTime / totalTimeMs;
+    }
+    
+    const netTimeHms = secondsToHms(netTimeMs / 1000);
+    
+    const summaryStartCol = colMap.intervalsStart - 3;
+    if (summaryStartCol >= 0) {
+        sheet.getCell(rowIdx, summaryStartCol).values = [[safeStr(netTimeHms)]];
+        sheet.getCell(rowIdx, summaryStartCol + 2).values = [[Number(avgWorkersFinal.toFixed(2))]];
     }
 }
+
+document.getElementById("btn-admin-edit-start").onclick = async () => {
+    if (currentRowIndex < 0) { alert("Pobierz dane wiersza (Zaznacz wiersz -> Pobierz Dane)."); return; }
+    currentAdminAction = "START";
+    hideAllAdminWraps();
+    document.getElementById("admin-action-title").innerText = `Edytuj Start (Wiersz ${currentRowIndex+1})`;
+    
+    setStatus("Pobieranie obecnego startu...");
+    let currentStart = "Brak";
+    try {
+        await Excel.run(async (ctx) => {
+            const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+            const cell = sheet.getCell(currentRowIndex, colMap.startGlobal).load("values");
+            await ctx.sync();
+            const v = cell.values[0][0];
+            if (v) {
+                const parsed = parseCustomDate(v.toString());
+                if (!isNaN(parsed)) currentStart = dateToFormatString(new Date(parsed));
+            }
+        });
+        document.getElementById("admin-time-current").value = currentStart;
+        document.getElementById("admin-edit-time-wrap").classList.remove("hidden");
+        document.getElementById("admin-menu-card").classList.add("hidden");
+        document.getElementById("admin-action-card").classList.remove("hidden");
+        setStatus("Tryb Admina gotowy.");
+    } catch (e) {
+        alert("Błąd: " + e.message);
+    }
+};
+
+document.getElementById("btn-admin-edit-end").onclick = async () => {
+    if (currentRowIndex < 0) { alert("Pobierz dane wiersza (Zaznacz wiersz -> Pobierz Dane)."); return; }
+    currentAdminAction = "END";
+    hideAllAdminWraps();
+    document.getElementById("admin-action-title").innerText = `Edytuj Koniec (Wiersz ${currentRowIndex+1})`;
+    
+    setStatus("Pobieranie obecnego końca...");
+    let currentEnd = "Brak";
+    try {
+        await Excel.run(async (ctx) => {
+            const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+            const cell = sheet.getCell(currentRowIndex, colMap.endGlobal).load("values");
+            await ctx.sync();
+            const v = cell.values[0][0];
+            if (v) {
+                const parsed = parseCustomDate(v.toString());
+                if (!isNaN(parsed)) currentEnd = dateToFormatString(new Date(parsed));
+            }
+        });
+        document.getElementById("admin-time-current").value = currentEnd;
+        document.getElementById("admin-edit-time-wrap").classList.remove("hidden");
+        document.getElementById("admin-menu-card").classList.add("hidden");
+        document.getElementById("admin-action-card").classList.remove("hidden");
+        setStatus("Tryb Admina gotowy.");
+    } catch (e) {
+        alert("Błąd: " + e.message);
+    }
+};
+
+document.getElementById("btn-admin-edit-ops").onclick = async () => {
+    if (currentRowIndex < 0) { alert("Pobierz dane wiersza (Zaznacz wiersz -> Pobierz Dane)."); return; }
+    currentAdminAction = "OPS";
+    hideAllAdminWraps();
+    document.getElementById("admin-action-title").innerText = `Edytuj Operatora i Pracowników (Wiersz ${currentRowIndex+1})`;
+    
+    setStatus("Pobieranie operatorów...");
+    try {
+        await Excel.run(async (ctx) => {
+            const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+            const opCell = sheet.getCell(currentRowIndex, colMap.operator).load("values");
+            const wCell = sheet.getCell(currentRowIndex, colMap.workers).load("values");
+            await ctx.sync();
+            document.getElementById("admin-ops-operator").value = opCell.values[0][0] || "";
+            document.getElementById("admin-ops-workers").value = wCell.values[0][0] || "";
+        });
+        document.getElementById("admin-edit-ops-wrap").classList.remove("hidden");
+        document.getElementById("admin-menu-card").classList.add("hidden");
+        document.getElementById("admin-action-card").classList.remove("hidden");
+        setStatus("Tryb Admina gotowy.");
+    } catch (e) {
+        alert("Błąd: " + e.message);
+    }
+};
+
+document.getElementById("btn-admin-del-one").onclick = () => {
+    if (currentRowIndex < 0) { alert("Pobierz dane wiersza (Zaznacz wiersz -> Pobierz Dane)."); return; }
+    currentAdminAction = "DEL_ONE";
+    hideAllAdminWraps();
+    document.getElementById("admin-action-title").innerText = `Skasuj wpis (Wiersz ${currentRowIndex+1})`;
+    document.getElementById("admin-del-text").innerText = `Czy na pewno usunąć logi nakładki z wiersza ${currentRowIndex+1}?`;
+    document.getElementById("admin-del-wrap").classList.remove("hidden");
+    document.getElementById("admin-menu-card").classList.add("hidden");
+    document.getElementById("admin-action-card").classList.remove("hidden");
+};
+
+document.getElementById("btn-admin-del-multi").onclick = () => {
+    currentAdminAction = "DEL_MULTI";
+    hideAllAdminWraps();
+    document.getElementById("admin-action-title").innerText = "Skasuj wiele wpisów z zaznaczenia";
+    document.getElementById("admin-del-text").innerText = "Zaznacz w Excelu grupę wierszy, z których chcesz wyczyścić logi, a następnie kliknij Zapisz / Skasuj.";
+    document.getElementById("admin-del-wrap").classList.remove("hidden");
+    document.getElementById("admin-menu-card").classList.add("hidden");
+    document.getElementById("admin-action-card").classList.remove("hidden");
+};
+
+document.getElementById("btn-admin-save").onclick = async () => {
+    setStatus("Przetwarzanie (Admin)...");
+    try {
+        await Excel.run(async (ctx) => {
+            const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+            sheet.protection.unprotect("ShortP26");
+            
+            if (currentAdminAction === "START") {
+                const newD = parseAdminDateStr(document.getElementById("admin-time-new").value);
+                if (isNaN(newD)) { alert("Błędny format daty! Użyj: DD-MM-YYYY HH:MM"); throw new Error("Format"); }
+                const excelNum = getExcelDateNumber(newD);
+                
+                sheet.getCell(currentRowIndex, colMap.startGlobal).values = [[excelNum]];
+                
+                const intRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 60).load("values");
+                await ctx.sync();
+                const ivals = intRange.values[0];
+                for (let i = 0; i < 10; i++) {
+                    const rolls = parseFloat(ivals[i*6 + 3]) || 0;
+                    if (rolls > 0) {
+                        const cell = sheet.getCell(currentRowIndex, colMap.intervalsStart + 1 + i*6 + 4);
+                        cell.values = [[excelNum]];
+                        cell.numberFormat = [["yyyy-mm-dd hh:mm"]];
+                        break;
+                    }
+                }
+                await recalculateRowSummary(ctx, sheet, currentRowIndex);
+                
+            } else if (currentAdminAction === "END") {
+                const newD = parseAdminDateStr(document.getElementById("admin-time-new").value);
+                if (isNaN(newD)) { alert("Błędny format daty! Użyj: DD-MM-YYYY HH:MM"); throw new Error("Format"); }
+                const excelNum = getExcelDateNumber(newD);
+                
+                sheet.getCell(currentRowIndex, colMap.endGlobal).values = [[excelNum]];
+                
+                const intRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 60).load("values");
+                await ctx.sync();
+                const ivals = intRange.values[0];
+                let lastIdx = -1;
+                for (let i = 0; i < 10; i++) {
+                    if (ivals[i*6 + 4]) { lastIdx = i; }
+                }
+                if (lastIdx >= 0) {
+                    const cell = sheet.getCell(currentRowIndex, colMap.intervalsStart + 1 + lastIdx*6 + 5);
+                    cell.values = [[excelNum]];
+                    cell.numberFormat = [["yyyy-mm-dd hh:mm"]];
+                }
+                await recalculateRowSummary(ctx, sheet, currentRowIndex);
+                
+            } else if (currentAdminAction === "OPS") {
+                const newOp = document.getElementById("admin-ops-operator").value;
+                const newWork = document.getElementById("admin-ops-workers").value;
+                sheet.getCell(currentRowIndex, colMap.operator).values = [[safeStr(newOp)]];
+                sheet.getCell(currentRowIndex, colMap.workers).values = [[safeStr(newWork)]];
+                
+            } else if (currentAdminAction === "DEL_ONE" || currentAdminAction === "DEL_MULTI") {
+                let rStart = currentRowIndex;
+                let rCount = 1;
+                if (currentAdminAction === "DEL_MULTI") {
+                    const sel = ctx.workbook.getSelectedRange().load(["rowIndex", "rowCount"]);
+                    await ctx.sync();
+                    rStart = sel.rowIndex;
+                    rCount = sel.rowCount;
+                }
+                
+                for(let r = rStart; r < rStart + rCount; r++) {
+                    sheet.getCell(r, colMap.operator).values = [[""]];
+                    sheet.getCell(r, colMap.workers).values = [[""]];
+                    sheet.getCell(r, colMap.machine).values = [[""]];
+                    sheet.getCell(r, colMap.startGlobal).values = [[""]];
+                    sheet.getCell(r, colMap.endGlobal).values = [[""]];
+                    sheet.getCell(r, colMap.awarie).values = [[""]];
+                    if (colMap.notes !== undefined) sheet.getCell(r, colMap.notes).values = [[""]];
+                    if (colMap.chkMat !== undefined) sheet.getCell(r, colMap.chkMat).values = [[""]];
+                    if (colMap.chkBreak !== undefined) sheet.getCell(r, colMap.chkBreak).values = [[""]];
+                    
+                    const summaryStartCol = colMap.intervalsStart - 3;
+                    if (summaryStartCol >= 0) {
+                        sheet.getRangeByIndexes(r, summaryStartCol, 1, 3).values = [["", "", ""]];
+                    }
+                    
+                    const emptyArr = Array(61).fill("");
+                    sheet.getRangeByIndexes(r, colMap.intervalsStart, 1, 61).values = [emptyArr];
+                }
+            }
+            
+            sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
+            await ctx.sync();
+            
+            alert("Operacja udana!");
+            document.getElementById("btn-admin-action-cancel").click();
+            
+            if (currentAdminAction === "START" || currentAdminAction === "END" || currentAdminAction === "OPS") {
+                document.getElementById("btn-fetch").click();
+            }
+        });
+    } catch (e) {
+        if (e.message !== "Format") {
+            console.error(e);
+            alert("Błąd zapisu: " + e.message);
+        }
+    }
+};  } catch (e) {
+        if (e.message !== "Format") {
+            console.error(e);
+            alert("BĹ‚Ä…d zapisu: " + e.message);
+        }
+    }
+};
+
+`;
+
+fs.writeFileSync(path.join(__dirname, 'append_admin.js'), adminCode, 'utf8');
+
