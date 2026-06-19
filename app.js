@@ -1094,6 +1094,9 @@ function hideAllAdminWraps() {
     document.getElementById("admin-create-awaria").value = "00:00:00";
     document.getElementById("admin-create-notes").value = "";
     
+    document.getElementById("admin-error-msg").classList.add("hidden");
+    document.getElementById("admin-error-msg").innerText = "";
+    
     const saveBtn = document.getElementById("btn-admin-save");
     saveBtn.innerText = "Zapisz";
     saveBtn.style.backgroundColor = "";
@@ -1119,6 +1122,12 @@ document.getElementById("btn-admin-login").onclick = () => {
         document.getElementById("admin-menu-card").classList.remove("hidden");
     } else {
         alert("Błędne hasło!");
+    }
+};
+
+document.getElementById("in-admin-pwd").onkeyup = (e) => {
+    if (e.key === "Enter") {
+        document.getElementById("btn-admin-login").click();
     }
 };
 
@@ -1336,20 +1345,35 @@ document.getElementById("btn-admin-create-new").onclick = async () => {
     } catch(e) {}
 };
 
+function showAdminError(msg) {
+    const el = document.getElementById("admin-error-msg");
+    el.innerText = msg;
+    el.classList.remove("hidden");
+    el.style.color = "#dc2626";
+}
+
+function showAdminSuccess(msg) {
+    const el = document.getElementById("admin-error-msg");
+    el.innerText = msg;
+    el.classList.remove("hidden");
+    el.style.color = "#059669";
+}
+
 document.getElementById("btn-admin-save").onclick = async () => {
     setStatus("Przetwarzanie (Admin)...");
+    document.getElementById("admin-error-msg").classList.add("hidden");
     
     let newD_start = NaN, newD_end = NaN, newD_cStart = NaN, newD_cEnd = NaN;
     if (currentAdminAction === "START") {
         newD_start = parseAdminDateStr(document.getElementById("admin-time-new").value);
-        if (isNaN(newD_start)) { alert("Błędny format daty! Użyj: DD-MM-YYYY HH:MM"); setStatus("Gotowe."); return; }
+        if (isNaN(newD_start)) { showAdminError("Błędny format daty! Użyj: DD-MM-YYYY HH:MM"); setStatus("Gotowe."); return; }
     } else if (currentAdminAction === "END") {
         newD_end = parseAdminDateStr(document.getElementById("admin-time-new").value);
-        if (isNaN(newD_end)) { alert("Błędny format daty! Użyj: DD-MM-YYYY HH:MM"); setStatus("Gotowe."); return; }
+        if (isNaN(newD_end)) { showAdminError("Błędny format daty! Użyj: DD-MM-YYYY HH:MM"); setStatus("Gotowe."); return; }
     } else if (currentAdminAction === "CREATE_NEW") {
         newD_cStart = parseAdminDateStr(document.getElementById("admin-create-start").value);
         newD_cEnd = parseAdminDateStr(document.getElementById("admin-create-end").value);
-        if (isNaN(newD_cStart) || isNaN(newD_cEnd)) { alert("Błędny format daty! Użyj: DD-MM-YYYY HH:MM"); setStatus("Gotowe."); return; }
+        if (isNaN(newD_cStart) || isNaN(newD_cEnd)) { showAdminError("Błędny format daty! Użyj: DD-MM-YYYY HH:MM"); setStatus("Gotowe."); return; }
     }
 
     try {
@@ -1467,13 +1491,16 @@ document.getElementById("btn-admin-save").onclick = async () => {
             
             sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
             await ctx.sync();
-            
-            alert("Operacja udana!");
+        });
+        
+        showAdminSuccess("Operacja udana!");
+        setTimeout(() => {
             document.getElementById("admin-action-card").classList.add("hidden");
             document.getElementById("admin-menu-card").classList.remove("hidden");
-        });
+            document.getElementById("admin-error-msg").classList.add("hidden");
+        }, 800);
     } catch (e) {
         console.error(e);
-        alert("Błąd zapisu: " + e.message);
+        showAdminError("Błąd zapisu: " + e.message);
     }
 };
