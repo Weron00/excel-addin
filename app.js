@@ -1461,8 +1461,9 @@ document.getElementById("btn-admin-save").onclick = async () => {
                 if (adminRowIndex === currentRowIndex && timerInterval !== null) {
                     if (adminOldStartMs > 0 && !isNaN(newD_start.getTime())) {
                         const diffMs = newD_start.getTime() - adminOldStartMs;
-                        if (typeof sessionStartTimeMs !== 'undefined') {
-                            sessionStartTimeMs += diffMs;
+                        const diffSec = Math.floor(diffMs / 1000);
+                        if (typeof secondsElapsed !== 'undefined') {
+                            secondsElapsed -= diffSec;
                         }
                     }
                 }
