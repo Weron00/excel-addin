@@ -38,6 +38,7 @@ Office.onReady((info) => {
                 await initializeColumnMap(context);
                 setStatus("Skanowanie listy niezakończonych...");
                 await scanForUnfinished(context);
+                loadMachines(); // Wczytanie maszyn przy starcie
             } catch (e) {
                 console.error(e);
                 setStatus("Błąd: " + e.message);
@@ -58,7 +59,33 @@ let activeSheetName = "";
 let timerInterval = null;
 let autoSaveInterval = null;
 let secondsElapsed = 0;
+let forceTargetUpdate = false;
 let isContinuing = false;
+
+// Konfiguracja maszyn
+let configuredMachines = [];
+
+function loadMachines() {
+    if (!Office.context.document.settings) return;
+    const stored = Office.context.document.settings.get("machineLimits");
+    if (stored) {
+        try {
+            configuredMachines = JSON.parse(stored);
+        } catch(e) {
+            configuredMachines = [];
+        }
+    }
+}
+
+function saveMachines() {
+    if (!Office.context.document.settings) return;
+    Office.context.document.settings.set("machineLimits", JSON.stringify(configuredMachines));
+    Office.context.document.settings.saveAsync((result) => {
+        if (result.status === Office.AsyncResultStatus.Failed) {
+            console.error("Failed to save machines: " + result.error.message);
+        }
+    });
+}
 
 // Przedziały
 let currentIntervalIndex = -1; // 0 do 9
@@ -498,19 +525,27 @@ async function showMachineSelection() {
             
             const selMachine = document.getElementById("sel-machine");
             selMachine.innerHTML = "";
-            worksheets.items.forEach((s) => {
+            
+            if (configuredMachines.length > 0) {
+                configuredMachines.forEach((m) => {
+                    const opt = document.createElement("option");
+                    opt.value = m.name;
+                    opt.text = m.name;
+                    
+                    if (isContinuing && selectedMachineForContinuation && m.name === selectedMachineForContinuation) {
+                        opt.selected = true;
+                    } else if (!isContinuing && m.name === activeSheetName) {
+                        opt.selected = true;
+                    }
+                    
+                    selMachine.appendChild(opt);
+                });
+            } else {
                 const opt = document.createElement("option");
-                opt.value = s.name;
-                opt.text = s.name;
-                
-                if (isContinuing && selectedMachineForContinuation && s.name === selectedMachineForContinuation) {
-                    opt.selected = true;
-                } else if (!isContinuing && s.name === activeSheetName) {
-                    opt.selected = true;
-                }
-                
+                opt.value = "";
+                opt.text = "BRAK SKONFIGUROWANYCH MASZYN! Pusty panel admina.";
                 selMachine.appendChild(opt);
-            });
+            }
             document.getElementById("data-card").classList.add("hidden");
             document.getElementById("machine-card").classList.remove("hidden");
             setStatus("Wybierz maszynę i kliknij Start Czasu.");
@@ -533,6 +568,14 @@ function handleStartTimerClick() {
             document.getElementById("machine-warning-card").classList.remove("hidden");
             return;
         }
+    }
+    
+    // Weryfikacja limitu rolek
+    const realRolls = parseFloat(document.getElementById("in-real-rolls").value);
+    const machConfig = configuredMachines.find(m => m.name === machine);
+    if (machConfig && machConfig.maxRolls !== null && !isNaN(realRolls) && realRolls > machConfig.maxRolls) {
+        alert(`BŁĄD: Maszyna "${machine}" może ciąć maksymalnie ${machConfig.maxRolls} rolek jednocześnie. Zmniejsz ilość!`);
+        return;
     }
     writeStartTime();
 }
@@ -686,7 +729,8 @@ function updateTimerDisplay() {
     const targetDetails = document.getElementById("target-details");
     
     // Aktualizacja UI targetu tylko co 3 minuty (180s) lub na starcie
-    if (secondsElapsed % 180 === 0 || secondsElapsed === 0 || targetValue.innerText === "START..." || targetValue.innerText === "Brak") {
+    if (forceTargetUpdate || secondsElapsed % 180 === 0 || secondsElapsed === 0 || targetValue.innerText === "START..." || targetValue.innerText === "Brak") {
+        forceTargetUpdate = false;
         if (theoreticalSeconds > 0 && totalGrossSecondsForTarget > 0) {
             const targetPct = (theoreticalSeconds / totalGrossSecondsForTarget) * 100;
             targetValue.innerText = Math.round(targetPct) + " %";
@@ -813,20 +857,24 @@ function toggleAwaria() {
             sheet.getCell(currentRowIndex, colMap.awarie).values = [[safeStr(secondsToHms(totalAwariaSecondsGlobal))]];
             sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
             await ctx.sync();
-        }).catch(e => console.warn(e));
+                    }).catch(e => console.warn(e));
     }
 }
 
 async function confirmChangeRolls() {
-    const newRollsStr = document.getElementById("in-new-rolls").value;
-    if (!newRollsStr) return;
-    const newRolls = parseFloat(newRollsStr);
-    if (isNaN(newRolls)) {
-        alert("Błędna wartość."); return;
+    const newRolls = parseFloat(document.getElementById("in-new-rolls").value);
+    if (isNaN(newRolls) || newRolls <= 0) {
+        alert("Błędna liczba rolek!");
+        return;
     }
     
-    // 1. Zakończ obecny przedział (zapisz Stop Time)
-    // 2. Wystartuj nowy przedział z nową liczbą rolek
+    // Weryfikacja limitu rolek
+    const machConfig = configuredMachines.find(m => m.name === activeSheetName);
+    if (machConfig && machConfig.maxRolls !== null && newRolls > machConfig.maxRolls) {
+        alert(`BŁĄD: Maszyna "${activeSheetName}" obsługuje maksymalnie ${machConfig.maxRolls} rolek! Wpisz poprawną wartość.`);
+        return;
+    }
+
     try {
         setStatus("Zmiana rolek - zapis...");
         await Excel.run(async (ctx) => {
@@ -843,10 +891,6 @@ async function confirmChangeRolls() {
             currentIntervalIndex++;
             if (currentIntervalIndex > 9) currentIntervalIndex = 9; // Overwrite last
             currentIntervalStartCol = colMap.intervalsStart + 1 + (currentIntervalIndex * 6);
-            
-            // Ponieważ zaczynamy nowy przedział, modyfikujemy TYLKO zapis startu przedziału. 
-            // NIE modyfikujemy stringa globalnego pracowników, bo to jest "w locie".
-            // Nie resetujemy intervalWorkerDiff. Zapis przedziału łapie po prostu obecny stan jako "Workers Start".
             
             // Zapis nowego przedziału
             const operator = document.getElementById("in-operator").value.trim() || "Brak";
@@ -1071,6 +1115,29 @@ let currentAdminAction = "";
 
 let adminRowIndex = -1;
 let adminOldStartMs = 0;
+let adminInactivityTimer = null;
+
+function resetAdminInactivityTimer() {
+    if (adminInactivityTimer) clearTimeout(adminInactivityTimer);
+    const overlay = document.getElementById("admin-overlay");
+    if (overlay && !overlay.classList.contains("hidden")) {
+        adminInactivityTimer = setTimeout(() => {
+            overlay.classList.add("hidden");
+            document.getElementById("admin-login-card").classList.remove("hidden");
+            document.getElementById("admin-menu-card").classList.add("hidden");
+            document.getElementById("admin-action-card").classList.add("hidden");
+            hideAllAdminWraps();
+        }, 60000); // 1 min
+    }
+}
+
+const admOverlay = document.getElementById("admin-overlay");
+if (admOverlay) {
+    admOverlay.addEventListener("mousemove", resetAdminInactivityTimer);
+    admOverlay.addEventListener("click", resetAdminInactivityTimer);
+    admOverlay.addEventListener("keydown", resetAdminInactivityTimer);
+    admOverlay.addEventListener("input", resetAdminInactivityTimer);
+}
 
 async function fetchAdminSelection() {
     return Excel.run(async (ctx) => {
@@ -1080,11 +1147,75 @@ async function fetchAdminSelection() {
     });
 }
 
+document.getElementById("btn-admin-machines").onclick = () => {
+    document.getElementById("admin-menu-card").classList.add("hidden");
+    document.getElementById("admin-machines-card").classList.remove("hidden");
+    renderAdminMachinesList();
+};
+
+document.getElementById("btn-admin-mach-close").onclick = () => {
+    document.getElementById("admin-machines-card").classList.add("hidden");
+    document.getElementById("admin-menu-card").classList.remove("hidden");
+};
+
+document.getElementById("btn-admin-mach-add").onclick = () => {
+    const mName = document.getElementById("admin-mach-name").value.trim();
+    const mLimit = document.getElementById("admin-mach-limit").value.trim();
+    if (!mName) return alert("Podaj nazwę maszyny (zakładki)!");
+    
+    const existing = configuredMachines.find(m => m.name === mName);
+    if (existing) {
+        existing.maxRolls = mLimit ? parseInt(mLimit) : null;
+    } else {
+        configuredMachines.push({ name: mName, maxRolls: mLimit ? parseInt(mLimit) : null });
+    }
+    
+    saveMachines();
+    renderAdminMachinesList();
+    document.getElementById("admin-mach-name").value = "";
+    document.getElementById("admin-mach-limit").value = "";
+};
+
+function renderAdminMachinesList() {
+    const listEl = document.getElementById("admin-mach-list");
+    listEl.innerHTML = "";
+    configuredMachines.forEach((m, idx) => {
+        const li = document.createElement("li");
+        li.style.display = "flex";
+        li.style.justifyContent = "space-between";
+        li.style.alignItems = "center";
+        li.style.padding = "6px 4px";
+        li.style.borderBottom = "1px solid #e5e7eb";
+        
+        const info = document.createElement("span");
+        info.innerText = `${m.name} (Max: ${m.maxRolls !== null ? m.maxRolls : 'Brak'})`;
+        
+        const delBtn = document.createElement("button");
+        delBtn.innerText = "✖";
+        delBtn.style.color = "#dc2626";
+        delBtn.style.fontWeight = "bold";
+        delBtn.style.background = "none";
+        delBtn.style.border = "none";
+        delBtn.style.cursor = "pointer";
+        delBtn.onclick = () => {
+            if (confirm(`Czy na pewno usunąć konfigurację dla maszyny ${m.name}?`)) {
+                configuredMachines.splice(idx, 1);
+                saveMachines();
+                renderAdminMachinesList();
+            }
+        };
+        
+        li.appendChild(info);
+        li.appendChild(delBtn);
+        listEl.appendChild(li);
+    });
+}
+
 function hideAllAdminWraps() {
     document.getElementById("admin-edit-time-wrap").classList.add("hidden");
     document.getElementById("admin-edit-ops-wrap").classList.add("hidden");
-    document.getElementById("admin-del-wrap").classList.add("hidden");
     document.getElementById("admin-create-wrap").classList.add("hidden");
+    document.getElementById("admin-del-wrap").classList.add("hidden");
     document.getElementById("admin-time-new").value = "";
     document.getElementById("admin-ops-operator").value = "";
     document.getElementById("admin-ops-workers").value = "";
@@ -1112,12 +1243,15 @@ document.getElementById("btn-admin-icon").onclick = () => {
     document.getElementById("admin-login-card").classList.remove("hidden");
     document.getElementById("admin-menu-card").classList.add("hidden");
     document.getElementById("admin-action-card").classList.add("hidden");
+    document.getElementById("admin-machines-card").classList.add("hidden");
     document.getElementById("in-admin-pwd").value = "";
     document.getElementById("in-admin-pwd").focus();
+    resetAdminInactivityTimer();
 };
 
 document.getElementById("btn-admin-cancel").onclick = () => {
     document.getElementById("admin-overlay").classList.add("hidden");
+    if (adminInactivityTimer) clearTimeout(adminInactivityTimer);
 };
 
 document.getElementById("btn-admin-login").onclick = () => {
@@ -1137,6 +1271,7 @@ document.getElementById("in-admin-pwd").onkeyup = (e) => {
 
 document.getElementById("btn-admin-close").onclick = () => {
     document.getElementById("admin-overlay").classList.add("hidden");
+    if (adminInactivityTimer) clearTimeout(adminInactivityTimer);
 };
 
 document.getElementById("btn-admin-action-cancel").onclick = () => {
@@ -1464,6 +1599,7 @@ document.getElementById("btn-admin-save").onclick = async () => {
                         const diffSec = Math.floor(diffMs / 1000);
                         if (typeof secondsElapsed !== 'undefined') {
                             secondsElapsed -= diffSec;
+                            if (typeof forceTargetUpdate !== 'undefined') forceTargetUpdate = true;
                         }
                     }
                 }
