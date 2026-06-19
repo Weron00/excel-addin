@@ -1135,16 +1135,21 @@ document.getElementById("btn-admin-icon").onclick = () => {
     document.getElementById("admin-menu-card").classList.add("hidden");
     document.getElementById("admin-action-card").classList.add("hidden");
     document.getElementById("admin-machines-card").classList.add("hidden");
-    document.getElementById("in-admin-pwd").value = "";
-    document.getElementById("in-admin-pwd").focus();
+    
+    const pwdInput = document.getElementById("in-admin-pwd");
+    pwdInput.value = "";
+    pwdInput.setAttribute("readonly", "readonly"); // Zapobiega autofill przed focusem
+    pwdInput.focus();
+    
     setTimeout(() => {
-        document.getElementById("in-admin-pwd").value = "";
+        pwdInput.value = ""; // Awaryjne czyszczenie
     }, 50);
     resetAdminInactivityTimer();
 };
 
 document.getElementById("btn-admin-cancel").onclick = () => {
     document.getElementById("admin-overlay").classList.add("hidden");
+    document.getElementById("in-admin-pwd").value = "";
     if (adminInactivityTimer) clearTimeout(adminInactivityTimer);
 };
 
@@ -1165,6 +1170,7 @@ document.getElementById("in-admin-pwd").onkeyup = (e) => {
 
 document.getElementById("btn-admin-close").onclick = () => {
     document.getElementById("admin-overlay").classList.add("hidden");
+    document.getElementById("in-admin-pwd").value = "";
     if (adminInactivityTimer) clearTimeout(adminInactivityTimer);
 };
 

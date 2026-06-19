@@ -172,7 +172,7 @@
             <div id="admin-login-card" class="card hidden">
                 <h3 style="margin:0 0 12px 0; font-size:15px; color:#111827;">Tryb Administratora</h3>
                 <div class="input-group">
-                    <input type="password" id="in-admin-pwd" placeholder="Podaj hasło..." autocomplete="new-password" spellcheck="false">
+                    <input type="password" id="in-admin-pwd" placeholder="Podaj hasło..." readonly onfocus="this.removeAttribute('readonly');" autocomplete="off" spellcheck="false">
                 </div>
                 <div style="display:flex; gap:8px; margin-top:16px;">
                     <button id="btn-admin-login" class="btn-primary" style="flex:1;">Zaloguj</button>
@@ -261,6 +261,6 @@
         </div>
 
     </div>
-    <script src="app.js?v=26"></script>
+    <script src="app.js?v=27"></script>
 </body>
 </html>
