@@ -1389,15 +1389,4 @@ document.getElementById("btn-admin-save").onclick = async () => {
             alert("Błąd zapisu: " + e.message);
         }
     }
-};  } catch (e) {
-        if (e.message !== "Format") {
-            console.error(e);
-            alert("BĹ‚Ä…d zapisu: " + e.message);
-        }
-    }
 };
-
-`;
-
-fs.writeFileSync(path.join(__dirname, 'append_admin.js'), adminCode, 'utf8');
-
