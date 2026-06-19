@@ -1058,7 +1058,14 @@ function resetUI() {
     document.getElementById("initial-card").classList.remove("hidden");
 }
 
-function setS// --- ADMIN MODULE ---
+function setStatus(message) {
+    const statusEl = document.getElementById("status-message");
+    if (statusEl) {
+        statusEl.innerText = message;
+    }
+}
+
+// --- ADMIN MODULE ---
 const adminPwd = "AdminIncoShort";
 let currentAdminAction = "";
 
