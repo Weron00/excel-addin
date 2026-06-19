@@ -1073,9 +1073,21 @@ function hideAllAdminWraps() {
     document.getElementById("admin-edit-time-wrap").classList.add("hidden");
     document.getElementById("admin-edit-ops-wrap").classList.add("hidden");
     document.getElementById("admin-del-wrap").classList.add("hidden");
+    document.getElementById("admin-create-wrap").classList.add("hidden");
     document.getElementById("admin-time-new").value = "";
     document.getElementById("admin-ops-operator").value = "";
     document.getElementById("admin-ops-workers").value = "";
+    document.getElementById("admin-create-op").value = "";
+    document.getElementById("admin-create-work").value = "";
+    document.getElementById("admin-create-start").value = "";
+    document.getElementById("admin-create-end").value = "";
+    document.getElementById("admin-create-awaria").value = "00:00:00";
+    document.getElementById("admin-create-notes").value = "";
+    
+    const saveBtn = document.getElementById("btn-admin-save");
+    saveBtn.innerText = "Zapisz";
+    saveBtn.style.backgroundColor = "";
+    saveBtn.style.borderColor = "";
 }
 
 document.getElementById("btn-admin-icon").onclick = () => {
@@ -1203,6 +1215,7 @@ document.getElementById("btn-admin-edit-start").onclick = async () => {
             }
         });
         document.getElementById("admin-time-current").value = currentStart;
+        document.getElementById("admin-time-new").value = currentStart !== "Brak" ? currentStart : "";
         document.getElementById("admin-edit-time-wrap").classList.remove("hidden");
         document.getElementById("admin-menu-card").classList.add("hidden");
         document.getElementById("admin-action-card").classList.remove("hidden");
@@ -1232,6 +1245,7 @@ document.getElementById("btn-admin-edit-end").onclick = async () => {
             }
         });
         document.getElementById("admin-time-current").value = currentEnd;
+        document.getElementById("admin-time-new").value = currentEnd !== "Brak" ? currentEnd : "";
         document.getElementById("admin-edit-time-wrap").classList.remove("hidden");
         document.getElementById("admin-menu-card").classList.add("hidden");
         document.getElementById("admin-action-card").classList.remove("hidden");
@@ -1275,30 +1289,61 @@ document.getElementById("btn-admin-del-one").onclick = () => {
     document.getElementById("admin-del-wrap").classList.remove("hidden");
     document.getElementById("admin-menu-card").classList.add("hidden");
     document.getElementById("admin-action-card").classList.remove("hidden");
+    
+    const saveBtn = document.getElementById("btn-admin-save");
+    saveBtn.innerText = "Kasuj";
+    saveBtn.style.backgroundColor = "#dc2626";
+    saveBtn.style.borderColor = "#dc2626";
 };
 
 document.getElementById("btn-admin-del-multi").onclick = () => {
     currentAdminAction = "DEL_MULTI";
     hideAllAdminWraps();
     document.getElementById("admin-action-title").innerText = "Skasuj wiele wpisów z zaznaczenia";
-    document.getElementById("admin-del-text").innerText = "Zaznacz w Excelu grupę wierszy, z których chcesz wyczyścić logi, a następnie kliknij Zapisz / Skasuj.";
+    document.getElementById("admin-del-text").innerText = "Zaznacz w Excelu grupę wierszy, z których chcesz wyczyścić logi, a następnie kliknij Kasuj.";
     document.getElementById("admin-del-wrap").classList.remove("hidden");
+    document.getElementById("admin-menu-card").classList.add("hidden");
+    document.getElementById("admin-action-card").classList.remove("hidden");
+    
+    const saveBtn = document.getElementById("btn-admin-save");
+    saveBtn.innerText = "Kasuj";
+    saveBtn.style.backgroundColor = "#dc2626";
+    saveBtn.style.borderColor = "#dc2626";
+};
+
+document.getElementById("btn-admin-create-new").onclick = () => {
+    if (currentRowIndex < 0) { alert("Pobierz dane wiersza (Zaznacz wiersz -> Pobierz Dane)."); return; }
+    currentAdminAction = "CREATE_NEW";
+    hideAllAdminWraps();
+    document.getElementById("admin-action-title").innerText = `Stwórz wpis na nowo (Wiersz ${currentRowIndex+1})`;
+    document.getElementById("admin-create-wrap").classList.remove("hidden");
     document.getElementById("admin-menu-card").classList.add("hidden");
     document.getElementById("admin-action-card").classList.remove("hidden");
 };
 
 document.getElementById("btn-admin-save").onclick = async () => {
     setStatus("Przetwarzanie (Admin)...");
+    
+    let newD_start = NaN, newD_end = NaN, newD_cStart = NaN, newD_cEnd = NaN;
+    if (currentAdminAction === "START") {
+        newD_start = parseAdminDateStr(document.getElementById("admin-time-new").value);
+        if (isNaN(newD_start)) { alert("Błędny format daty! Użyj: DD-MM-YYYY HH:MM"); setStatus("Gotowe."); return; }
+    } else if (currentAdminAction === "END") {
+        newD_end = parseAdminDateStr(document.getElementById("admin-time-new").value);
+        if (isNaN(newD_end)) { alert("Błędny format daty! Użyj: DD-MM-YYYY HH:MM"); setStatus("Gotowe."); return; }
+    } else if (currentAdminAction === "CREATE_NEW") {
+        newD_cStart = parseAdminDateStr(document.getElementById("admin-create-start").value);
+        newD_cEnd = parseAdminDateStr(document.getElementById("admin-create-end").value);
+        if (isNaN(newD_cStart) || isNaN(newD_cEnd)) { alert("Błędny format daty! Użyj: DD-MM-YYYY HH:MM"); setStatus("Gotowe."); return; }
+    }
+
     try {
         await Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
             sheet.protection.unprotect("ShortP26");
             
             if (currentAdminAction === "START") {
-                const newD = parseAdminDateStr(document.getElementById("admin-time-new").value);
-                if (isNaN(newD)) { alert("Błędny format daty! Użyj: DD-MM-YYYY HH:MM"); throw new Error("Format"); }
-                const excelNum = getExcelDateNumber(newD);
-                
+                const excelNum = getExcelDateNumber(newD_start);
                 sheet.getCell(currentRowIndex, colMap.startGlobal).values = [[excelNum]];
                 
                 const intRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 60).load("values");
@@ -1316,10 +1361,7 @@ document.getElementById("btn-admin-save").onclick = async () => {
                 await recalculateRowSummary(ctx, sheet, currentRowIndex);
                 
             } else if (currentAdminAction === "END") {
-                const newD = parseAdminDateStr(document.getElementById("admin-time-new").value);
-                if (isNaN(newD)) { alert("Błędny format daty! Użyj: DD-MM-YYYY HH:MM"); throw new Error("Format"); }
-                const excelNum = getExcelDateNumber(newD);
-                
+                const excelNum = getExcelDateNumber(newD_end);
                 sheet.getCell(currentRowIndex, colMap.endGlobal).values = [[excelNum]];
                 
                 const intRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 60).load("values");
@@ -1337,10 +1379,42 @@ document.getElementById("btn-admin-save").onclick = async () => {
                 await recalculateRowSummary(ctx, sheet, currentRowIndex);
                 
             } else if (currentAdminAction === "OPS") {
-                const newOp = document.getElementById("admin-ops-operator").value;
-                const newWork = document.getElementById("admin-ops-workers").value;
-                sheet.getCell(currentRowIndex, colMap.operator).values = [[safeStr(newOp)]];
-                sheet.getCell(currentRowIndex, colMap.workers).values = [[safeStr(newWork)]];
+                const newOp = document.getElementById("admin-ops-operator").value || "";
+                const newWork = document.getElementById("admin-ops-workers").value || "";
+                sheet.getCell(currentRowIndex, colMap.operator).values = [[newOp.toString()]];
+                sheet.getCell(currentRowIndex, colMap.workers).values = [[newWork.toString()]];
+                
+            } else if (currentAdminAction === "CREATE_NEW") {
+                const op = document.getElementById("admin-create-op").value || "";
+                const work = document.getElementById("admin-create-work").value || "";
+                const awaria = document.getElementById("admin-create-awaria").value || "00:00:00";
+                const notes = document.getElementById("admin-create-notes").value || "";
+                
+                const sExcel = getExcelDateNumber(newD_cStart);
+                const eExcel = getExcelDateNumber(newD_cEnd);
+                
+                sheet.getCell(currentRowIndex, colMap.operator).values = [[op.toString()]];
+                sheet.getCell(currentRowIndex, colMap.workers).values = [[work.toString()]];
+                sheet.getCell(currentRowIndex, colMap.startGlobal).values = [[sExcel]];
+                sheet.getCell(currentRowIndex, colMap.endGlobal).values = [[eExcel]];
+                sheet.getCell(currentRowIndex, colMap.awarie).values = [[awaria.toString()]];
+                if (colMap.notes !== undefined) sheet.getCell(currentRowIndex, colMap.notes).values = [[notes.toString()]];
+                
+                const emptyArr = Array(61).fill("");
+                sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart, 1, 61).values = [emptyArr];
+                
+                const wCount = parseFloat(work) || 0;
+                sheet.getCell(currentRowIndex, colMap.intervalsStart + 1).values = [[wCount]];
+                sheet.getCell(currentRowIndex, colMap.intervalsStart + 2).values = [[wCount]];
+                sheet.getCell(currentRowIndex, colMap.intervalsStart + 3).values = [[1]]; 
+                
+                const cellStart = sheet.getCell(currentRowIndex, colMap.intervalsStart + 4);
+                cellStart.values = [[sExcel]]; cellStart.numberFormat = [["yyyy-mm-dd hh:mm"]];
+                
+                const cellEnd = sheet.getCell(currentRowIndex, colMap.intervalsStart + 5);
+                cellEnd.values = [[eExcel]]; cellEnd.numberFormat = [["yyyy-mm-dd hh:mm"]];
+                
+                await recalculateRowSummary(ctx, sheet, currentRowIndex);
                 
             } else if (currentAdminAction === "DEL_ONE" || currentAdminAction === "DEL_MULTI") {
                 let rStart = currentRowIndex;
@@ -1377,16 +1451,15 @@ document.getElementById("btn-admin-save").onclick = async () => {
             await ctx.sync();
             
             alert("Operacja udana!");
-            document.getElementById("btn-admin-action-cancel").click();
+            document.getElementById("admin-action-card").classList.add("hidden");
+            document.getElementById("admin-menu-card").classList.remove("hidden");
             
-            if (currentAdminAction === "START" || currentAdminAction === "END" || currentAdminAction === "OPS") {
+            if (currentAdminAction === "START" || currentAdminAction === "END" || currentAdminAction === "OPS" || currentAdminAction === "CREATE_NEW") {
                 document.getElementById("btn-fetch").click();
             }
         });
     } catch (e) {
-        if (e.message !== "Format") {
-            console.error(e);
-            alert("Błąd zapisu: " + e.message);
-        }
+        console.error(e);
+        alert("Błąd zapisu: " + e.message);
     }
 };
