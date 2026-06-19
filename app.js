@@ -1098,6 +1098,9 @@ function hideAllAdminWraps() {
     document.getElementById("admin-error-msg").classList.add("hidden");
     document.getElementById("admin-error-msg").innerText = "";
     
+    const warnEl = document.getElementById("admin-live-warn");
+    if (warnEl) warnEl.classList.add("hidden");
+    
     const saveBtn = document.getElementById("btn-admin-save");
     saveBtn.innerText = "Zapisz";
     saveBtn.style.backgroundColor = "";
@@ -1239,6 +1242,12 @@ document.getElementById("btn-admin-edit-start").onclick = async () => {
         document.getElementById("admin-edit-time-wrap").classList.remove("hidden");
         document.getElementById("admin-menu-card").classList.add("hidden");
         document.getElementById("admin-action-card").classList.remove("hidden");
+        
+        if (adminRowIndex === currentRowIndex && timerInterval !== null) {
+            const warnEl = document.getElementById("admin-live-warn");
+            if (warnEl) warnEl.classList.remove("hidden");
+        }
+        
         setStatus("Tryb Admina gotowy.");
     } catch (e) {
         alert("Błąd: " + e.message);
@@ -1386,24 +1395,23 @@ document.getElementById("btn-admin-save").onclick = async () => {
             showAdminError("Nie można edytować końca pozycji, nad którą obecnie pracuje licznik.");
             setStatus("Gotowe."); return;
         }
-        if (currentAdminAction === "START") {
-            if (!confirm("Czy chcesz poprawić start pozycji nad którą aktualnie pracujesz? Zmieni to również na żywo czas w liczniku.")) {
-                setStatus("Anulowano."); return;
-            }
-        }
     }
     
+    const nowMs = Date.now();
     let newD_start = NaN, newD_end = NaN, newD_cStart = NaN, newD_cEnd = NaN;
     if (currentAdminAction === "START") {
         newD_start = parseAdminDateStr(document.getElementById("admin-time-new").value);
         if (isNaN(newD_start)) { showAdminError("Błędny format daty! Użyj: DD-MM-YYYY HH:MM"); setStatus("Gotowe."); return; }
+        if (newD_start.getTime() > nowMs) { showAdminError("Data i godzina nie może być z przyszłości!"); setStatus("Gotowe."); return; }
     } else if (currentAdminAction === "END") {
         newD_end = parseAdminDateStr(document.getElementById("admin-time-new").value);
         if (isNaN(newD_end)) { showAdminError("Błędny format daty! Użyj: DD-MM-YYYY HH:MM"); setStatus("Gotowe."); return; }
+        if (newD_end.getTime() > nowMs) { showAdminError("Data i godzina nie może być z przyszłości!"); setStatus("Gotowe."); return; }
     } else if (currentAdminAction === "CREATE_NEW") {
         newD_cStart = parseAdminDateStr(document.getElementById("admin-create-start").value);
         newD_cEnd = parseAdminDateStr(document.getElementById("admin-create-end").value);
         if (isNaN(newD_cStart) || isNaN(newD_cEnd)) { showAdminError("Błędny format daty! Użyj: DD-MM-YYYY HH:MM"); setStatus("Gotowe."); return; }
+        if (newD_cStart.getTime() > nowMs || newD_cEnd.getTime() > nowMs) { showAdminError("Data i godzina nie może być z przyszłości!"); setStatus("Gotowe."); return; }
     }
 
     try {
