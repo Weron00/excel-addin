@@ -1137,6 +1137,9 @@ document.getElementById("btn-admin-icon").onclick = () => {
     document.getElementById("admin-machines-card").classList.add("hidden");
     document.getElementById("in-admin-pwd").value = "";
     document.getElementById("in-admin-pwd").focus();
+    setTimeout(() => {
+        document.getElementById("in-admin-pwd").value = "";
+    }, 50);
     resetAdminInactivityTimer();
 };
 
