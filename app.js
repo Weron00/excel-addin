@@ -1377,7 +1377,7 @@ document.getElementById("btn-admin-save").onclick = async () => {
     if (errorEl) errorEl.classList.add("hidden");
     
     // Zabezpieczenia dla pracującego wiersza
-    if (adminRowIndex === currentRowIndex && typeof isTimerRunning !== 'undefined' && isTimerRunning) {
+    if (adminRowIndex === currentRowIndex && timerInterval !== null) {
         if (currentAdminAction === "DEL_ONE") {
             showAdminError("Nie możesz skasować pozycji, nad którą obecnie pracuje licznik.");
             setStatus("Gotowe."); return;
@@ -1411,7 +1411,7 @@ document.getElementById("btn-admin-save").onclick = async () => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
             
             // Ochrona DEL_MULTI przed skasowaniem pracującego wiersza
-            if (currentAdminAction === "DEL_MULTI" && typeof isTimerRunning !== 'undefined' && isTimerRunning) {
+            if (currentAdminAction === "DEL_MULTI" && timerInterval !== null) {
                 const sel = ctx.workbook.getSelectedRange().load(["rowIndex", "rowCount"]);
                 await ctx.sync();
                 if (currentRowIndex >= sel.rowIndex && currentRowIndex < sel.rowIndex + sel.rowCount) {
@@ -1450,7 +1450,7 @@ document.getElementById("btn-admin-save").onclick = async () => {
                 await recalculateRowSummary(ctx, sheet, adminRowIndex);
                 
                 // Aktualizacja żywego licznika, jeśli edytujemy bieżący
-                if (adminRowIndex === currentRowIndex && typeof isTimerRunning !== 'undefined' && isTimerRunning) {
+                if (adminRowIndex === currentRowIndex && timerInterval !== null) {
                     if (adminOldStartMs > 0 && !isNaN(newD_start.getTime())) {
                         const diffMs = newD_start.getTime() - adminOldStartMs;
                         if (typeof sessionStartTimeMs !== 'undefined') {
