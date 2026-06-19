@@ -1070,6 +1070,7 @@ const adminPwd = "AdminIncoShort";
 let currentAdminAction = "";
 
 let adminRowIndex = -1;
+let adminOldStartMs = 0;
 
 async function fetchAdminSelection() {
     return Excel.run(async (ctx) => {
@@ -1227,7 +1228,10 @@ document.getElementById("btn-admin-edit-start").onclick = async () => {
             const v = cell.values[0][0];
             if (v) {
                 const parsed = parseCustomDate(v.toString());
-                if (!isNaN(parsed)) currentStart = dateToFormatString(new Date(parsed));
+                if (!isNaN(parsed)) {
+                    currentStart = dateToFormatString(new Date(parsed));
+                    adminOldStartMs = parsed;
+                }
             }
         });
         document.getElementById("admin-time-current").value = currentStart;
@@ -1347,21 +1351,47 @@ document.getElementById("btn-admin-create-new").onclick = async () => {
 
 function showAdminError(msg) {
     const el = document.getElementById("admin-error-msg");
-    el.innerText = msg;
-    el.classList.remove("hidden");
-    el.style.color = "#dc2626";
+    if (el) {
+        el.innerText = msg;
+        el.classList.remove("hidden");
+        el.style.color = "#dc2626";
+    } else {
+        alert(msg);
+    }
 }
 
 function showAdminSuccess(msg) {
     const el = document.getElementById("admin-error-msg");
-    el.innerText = msg;
-    el.classList.remove("hidden");
-    el.style.color = "#059669";
+    if (el) {
+        el.innerText = msg;
+        el.classList.remove("hidden");
+        el.style.color = "#059669";
+    } else {
+        alert(msg);
+    }
 }
 
 document.getElementById("btn-admin-save").onclick = async () => {
     setStatus("Przetwarzanie (Admin)...");
-    document.getElementById("admin-error-msg").classList.add("hidden");
+    const errorEl = document.getElementById("admin-error-msg");
+    if (errorEl) errorEl.classList.add("hidden");
+    
+    // Zabezpieczenia dla pracującego wiersza
+    if (adminRowIndex === currentRowIndex && typeof isTimerRunning !== 'undefined' && isTimerRunning) {
+        if (currentAdminAction === "DEL_ONE") {
+            showAdminError("Nie możesz skasować pozycji, nad którą obecnie pracuje licznik.");
+            setStatus("Gotowe."); return;
+        }
+        if (currentAdminAction === "END") {
+            showAdminError("Nie można edytować końca pozycji, nad którą obecnie pracuje licznik.");
+            setStatus("Gotowe."); return;
+        }
+        if (currentAdminAction === "START") {
+            if (!confirm("Czy chcesz poprawić start pozycji nad którą aktualnie pracujesz? Zmieni to również na żywo czas w liczniku.")) {
+                setStatus("Anulowano."); return;
+            }
+        }
+    }
     
     let newD_start = NaN, newD_end = NaN, newD_cStart = NaN, newD_cEnd = NaN;
     if (currentAdminAction === "START") {
@@ -1379,6 +1409,25 @@ document.getElementById("btn-admin-save").onclick = async () => {
     try {
         await Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+            
+            // Ochrona DEL_MULTI przed skasowaniem pracującego wiersza
+            if (currentAdminAction === "DEL_MULTI" && typeof isTimerRunning !== 'undefined' && isTimerRunning) {
+                const sel = ctx.workbook.getSelectedRange().load(["rowIndex", "rowCount"]);
+                await ctx.sync();
+                if (currentRowIndex >= sel.rowIndex && currentRowIndex < sel.rowIndex + sel.rowCount) {
+                    throw new Error("ADMIN_PROTECT_DEL_MULTI");
+                }
+            }
+            
+            // Ochrona CREATE_NEW przed nadpisaniem danych (bezpieczniej blokować zawsze gdy są dane)
+            if (currentAdminAction === "CREATE_NEW") {
+                const checkCell = sheet.getCell(adminRowIndex, colMap.startGlobal).load("values");
+                await ctx.sync();
+                if (checkCell.values[0][0]) {
+                    throw new Error("ADMIN_PROTECT_CREATE_NEW_DATA");
+                }
+            }
+            
             sheet.protection.unprotect("ShortP26");
             
             if (currentAdminAction === "START") {
@@ -1399,6 +1448,16 @@ document.getElementById("btn-admin-save").onclick = async () => {
                 }
                 await ctx.sync();
                 await recalculateRowSummary(ctx, sheet, adminRowIndex);
+                
+                // Aktualizacja żywego licznika, jeśli edytujemy bieżący
+                if (adminRowIndex === currentRowIndex && typeof isTimerRunning !== 'undefined' && isTimerRunning) {
+                    if (adminOldStartMs > 0 && !isNaN(newD_start.getTime())) {
+                        const diffMs = newD_start.getTime() - adminOldStartMs;
+                        if (typeof sessionStartTimeMs !== 'undefined') {
+                            sessionStartTimeMs += diffMs;
+                        }
+                    }
+                }
                 
             } else if (currentAdminAction === "END") {
                 const excelNum = getExcelDateNumber(newD_end);
@@ -1497,10 +1556,17 @@ document.getElementById("btn-admin-save").onclick = async () => {
         setTimeout(() => {
             document.getElementById("admin-action-card").classList.add("hidden");
             document.getElementById("admin-menu-card").classList.remove("hidden");
-            document.getElementById("admin-error-msg").classList.add("hidden");
+            const msgEl = document.getElementById("admin-error-msg");
+            if (msgEl) msgEl.classList.add("hidden");
         }, 800);
     } catch (e) {
         console.error(e);
-        showAdminError("Błąd zapisu: " + e.message);
+        if (e.message === "ADMIN_PROTECT_DEL_MULTI") {
+            showAdminError("Zaznaczenie obejmuje wiersz, nad którym obecnie pracujesz! Zmień zaznaczenie przed kasowaniem.");
+        } else if (e.message === "ADMIN_PROTECT_CREATE_NEW_DATA") {
+            showAdminError("Nie można utworzyć wpisu tam, gdzie są już dane. Najpierw użyj opcji 'Skasuj wpis'.");
+        } else {
+            showAdminError("Błąd zapisu: " + e.message);
+        }
     }
 };
