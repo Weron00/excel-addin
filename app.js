@@ -1069,6 +1069,16 @@ function setStatus(message) {
 const adminPwd = "AdminIncoShort";
 let currentAdminAction = "";
 
+let adminRowIndex = -1;
+
+async function fetchAdminSelection() {
+    return Excel.run(async (ctx) => {
+        const sel = ctx.workbook.getSelectedRange().load("rowIndex");
+        await ctx.sync();
+        return sel.rowIndex;
+    });
+}
+
 function hideAllAdminWraps() {
     document.getElementById("admin-edit-time-wrap").classList.add("hidden");
     document.getElementById("admin-edit-ops-wrap").classList.add("hidden");
@@ -1091,19 +1101,16 @@ function hideAllAdminWraps() {
 }
 
 document.getElementById("btn-admin-icon").onclick = () => {
-    document.getElementById("initial-card").classList.add("hidden");
-    document.getElementById("data-card").classList.add("hidden");
-    document.getElementById("machine-card").classList.add("hidden");
-    document.getElementById("running-card").classList.add("hidden");
-    document.getElementById("incidents-card").classList.add("hidden");
-    
+    document.getElementById("admin-overlay").classList.remove("hidden");
     document.getElementById("admin-login-card").classList.remove("hidden");
+    document.getElementById("admin-menu-card").classList.add("hidden");
+    document.getElementById("admin-action-card").classList.add("hidden");
     document.getElementById("in-admin-pwd").value = "";
     document.getElementById("in-admin-pwd").focus();
 };
 
 document.getElementById("btn-admin-cancel").onclick = () => {
-    resetUI();
+    document.getElementById("admin-overlay").classList.add("hidden");
 };
 
 document.getElementById("btn-admin-login").onclick = () => {
@@ -1116,8 +1123,7 @@ document.getElementById("btn-admin-login").onclick = () => {
 };
 
 document.getElementById("btn-admin-close").onclick = () => {
-    document.getElementById("admin-menu-card").classList.add("hidden");
-    resetUI();
+    document.getElementById("admin-overlay").classList.add("hidden");
 };
 
 document.getElementById("btn-admin-action-cancel").onclick = () => {
@@ -1196,17 +1202,18 @@ async function recalculateRowSummary(ctx, sheet, rowIdx) {
 }
 
 document.getElementById("btn-admin-edit-start").onclick = async () => {
-    if (currentRowIndex < 0) { alert("Pobierz dane wiersza (Zaznacz wiersz -> Pobierz Dane)."); return; }
-    currentAdminAction = "START";
-    hideAllAdminWraps();
-    document.getElementById("admin-action-title").innerText = `Edytuj Start (Wiersz ${currentRowIndex+1})`;
-    
-    setStatus("Pobieranie obecnego startu...");
-    let currentStart = "Brak";
     try {
+        adminRowIndex = await fetchAdminSelection();
+        if (adminRowIndex < 0) return;
+        currentAdminAction = "START";
+        hideAllAdminWraps();
+        document.getElementById("admin-action-title").innerText = `Edytuj Start (Wiersz ${adminRowIndex+1})`;
+        
+        setStatus("Pobieranie obecnego startu...");
+        let currentStart = "Brak";
         await Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
-            const cell = sheet.getCell(currentRowIndex, colMap.startGlobal).load("values");
+            const cell = sheet.getCell(adminRowIndex, colMap.startGlobal).load("values");
             await ctx.sync();
             const v = cell.values[0][0];
             if (v) {
@@ -1226,17 +1233,18 @@ document.getElementById("btn-admin-edit-start").onclick = async () => {
 };
 
 document.getElementById("btn-admin-edit-end").onclick = async () => {
-    if (currentRowIndex < 0) { alert("Pobierz dane wiersza (Zaznacz wiersz -> Pobierz Dane)."); return; }
-    currentAdminAction = "END";
-    hideAllAdminWraps();
-    document.getElementById("admin-action-title").innerText = `Edytuj Koniec (Wiersz ${currentRowIndex+1})`;
-    
-    setStatus("Pobieranie obecnego końca...");
-    let currentEnd = "Brak";
     try {
+        adminRowIndex = await fetchAdminSelection();
+        if (adminRowIndex < 0) return;
+        currentAdminAction = "END";
+        hideAllAdminWraps();
+        document.getElementById("admin-action-title").innerText = `Edytuj Koniec (Wiersz ${adminRowIndex+1})`;
+        
+        setStatus("Pobieranie obecnego końca...");
+        let currentEnd = "Brak";
         await Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
-            const cell = sheet.getCell(currentRowIndex, colMap.endGlobal).load("values");
+            const cell = sheet.getCell(adminRowIndex, colMap.endGlobal).load("values");
             await ctx.sync();
             const v = cell.values[0][0];
             if (v) {
@@ -1256,17 +1264,18 @@ document.getElementById("btn-admin-edit-end").onclick = async () => {
 };
 
 document.getElementById("btn-admin-edit-ops").onclick = async () => {
-    if (currentRowIndex < 0) { alert("Pobierz dane wiersza (Zaznacz wiersz -> Pobierz Dane)."); return; }
-    currentAdminAction = "OPS";
-    hideAllAdminWraps();
-    document.getElementById("admin-action-title").innerText = `Edytuj Operatora i Pracowników (Wiersz ${currentRowIndex+1})`;
-    
-    setStatus("Pobieranie operatorów...");
     try {
+        adminRowIndex = await fetchAdminSelection();
+        if (adminRowIndex < 0) return;
+        currentAdminAction = "OPS";
+        hideAllAdminWraps();
+        document.getElementById("admin-action-title").innerText = `Edytuj Operatora i Pracowników (Wiersz ${adminRowIndex+1})`;
+        
+        setStatus("Pobieranie operatorów...");
         await Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
-            const opCell = sheet.getCell(currentRowIndex, colMap.operator).load("values");
-            const wCell = sheet.getCell(currentRowIndex, colMap.workers).load("values");
+            const opCell = sheet.getCell(adminRowIndex, colMap.operator).load("values");
+            const wCell = sheet.getCell(adminRowIndex, colMap.workers).load("values");
             await ctx.sync();
             document.getElementById("admin-ops-operator").value = opCell.values[0][0] || "";
             document.getElementById("admin-ops-workers").value = wCell.values[0][0] || "";
@@ -1280,20 +1289,23 @@ document.getElementById("btn-admin-edit-ops").onclick = async () => {
     }
 };
 
-document.getElementById("btn-admin-del-one").onclick = () => {
-    if (currentRowIndex < 0) { alert("Pobierz dane wiersza (Zaznacz wiersz -> Pobierz Dane)."); return; }
-    currentAdminAction = "DEL_ONE";
-    hideAllAdminWraps();
-    document.getElementById("admin-action-title").innerText = `Skasuj wpis (Wiersz ${currentRowIndex+1})`;
-    document.getElementById("admin-del-text").innerText = `Czy na pewno usunąć logi nakładki z wiersza ${currentRowIndex+1}?`;
-    document.getElementById("admin-del-wrap").classList.remove("hidden");
-    document.getElementById("admin-menu-card").classList.add("hidden");
-    document.getElementById("admin-action-card").classList.remove("hidden");
-    
-    const saveBtn = document.getElementById("btn-admin-save");
-    saveBtn.innerText = "Kasuj";
-    saveBtn.style.backgroundColor = "#dc2626";
-    saveBtn.style.borderColor = "#dc2626";
+document.getElementById("btn-admin-del-one").onclick = async () => {
+    try {
+        adminRowIndex = await fetchAdminSelection();
+        if (adminRowIndex < 0) return;
+        currentAdminAction = "DEL_ONE";
+        hideAllAdminWraps();
+        document.getElementById("admin-action-title").innerText = `Skasuj wpis (Wiersz ${adminRowIndex+1})`;
+        document.getElementById("admin-del-text").innerText = `Czy na pewno usunąć logi nakładki z wiersza ${adminRowIndex+1}?`;
+        document.getElementById("admin-del-wrap").classList.remove("hidden");
+        document.getElementById("admin-menu-card").classList.add("hidden");
+        document.getElementById("admin-action-card").classList.remove("hidden");
+        
+        const saveBtn = document.getElementById("btn-admin-save");
+        saveBtn.innerText = "Kasuj";
+        saveBtn.style.backgroundColor = "#dc2626";
+        saveBtn.style.borderColor = "#dc2626";
+    } catch(e) {}
 };
 
 document.getElementById("btn-admin-del-multi").onclick = () => {
@@ -1311,14 +1323,17 @@ document.getElementById("btn-admin-del-multi").onclick = () => {
     saveBtn.style.borderColor = "#dc2626";
 };
 
-document.getElementById("btn-admin-create-new").onclick = () => {
-    if (currentRowIndex < 0) { alert("Pobierz dane wiersza (Zaznacz wiersz -> Pobierz Dane)."); return; }
-    currentAdminAction = "CREATE_NEW";
-    hideAllAdminWraps();
-    document.getElementById("admin-action-title").innerText = `Stwórz wpis na nowo (Wiersz ${currentRowIndex+1})`;
-    document.getElementById("admin-create-wrap").classList.remove("hidden");
-    document.getElementById("admin-menu-card").classList.add("hidden");
-    document.getElementById("admin-action-card").classList.remove("hidden");
+document.getElementById("btn-admin-create-new").onclick = async () => {
+    try {
+        adminRowIndex = await fetchAdminSelection();
+        if (adminRowIndex < 0) return;
+        currentAdminAction = "CREATE_NEW";
+        hideAllAdminWraps();
+        document.getElementById("admin-action-title").innerText = `Stwórz wpis na nowo (Wiersz ${adminRowIndex+1})`;
+        document.getElementById("admin-create-wrap").classList.remove("hidden");
+        document.getElementById("admin-menu-card").classList.add("hidden");
+        document.getElementById("admin-action-card").classList.remove("hidden");
+    } catch(e) {}
 };
 
 document.getElementById("btn-admin-save").onclick = async () => {
@@ -1344,27 +1359,28 @@ document.getElementById("btn-admin-save").onclick = async () => {
             
             if (currentAdminAction === "START") {
                 const excelNum = getExcelDateNumber(newD_start);
-                sheet.getCell(currentRowIndex, colMap.startGlobal).values = [[excelNum]];
+                sheet.getCell(adminRowIndex, colMap.startGlobal).values = [[excelNum]];
                 
-                const intRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 60).load("values");
+                const intRange = sheet.getRangeByIndexes(adminRowIndex, colMap.intervalsStart + 1, 1, 60).load("values");
                 await ctx.sync();
                 const ivals = intRange.values[0];
                 for (let i = 0; i < 10; i++) {
                     const rolls = parseFloat(ivals[i*6 + 3]) || 0;
                     if (rolls > 0) {
-                        const cell = sheet.getCell(currentRowIndex, colMap.intervalsStart + 1 + i*6 + 4);
+                        const cell = sheet.getCell(adminRowIndex, colMap.intervalsStart + 1 + i*6 + 4);
                         cell.values = [[excelNum]];
                         cell.numberFormat = [["yyyy-mm-dd hh:mm"]];
                         break;
                     }
                 }
-                await recalculateRowSummary(ctx, sheet, currentRowIndex);
+                await ctx.sync();
+                await recalculateRowSummary(ctx, sheet, adminRowIndex);
                 
             } else if (currentAdminAction === "END") {
                 const excelNum = getExcelDateNumber(newD_end);
-                sheet.getCell(currentRowIndex, colMap.endGlobal).values = [[excelNum]];
+                sheet.getCell(adminRowIndex, colMap.endGlobal).values = [[excelNum]];
                 
-                const intRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 60).load("values");
+                const intRange = sheet.getRangeByIndexes(adminRowIndex, colMap.intervalsStart + 1, 1, 60).load("values");
                 await ctx.sync();
                 const ivals = intRange.values[0];
                 let lastIdx = -1;
@@ -1372,17 +1388,18 @@ document.getElementById("btn-admin-save").onclick = async () => {
                     if (ivals[i*6 + 4]) { lastIdx = i; }
                 }
                 if (lastIdx >= 0) {
-                    const cell = sheet.getCell(currentRowIndex, colMap.intervalsStart + 1 + lastIdx*6 + 5);
+                    const cell = sheet.getCell(adminRowIndex, colMap.intervalsStart + 1 + lastIdx*6 + 5);
                     cell.values = [[excelNum]];
                     cell.numberFormat = [["yyyy-mm-dd hh:mm"]];
                 }
-                await recalculateRowSummary(ctx, sheet, currentRowIndex);
+                await ctx.sync();
+                await recalculateRowSummary(ctx, sheet, adminRowIndex);
                 
             } else if (currentAdminAction === "OPS") {
                 const newOp = document.getElementById("admin-ops-operator").value || "";
                 const newWork = document.getElementById("admin-ops-workers").value || "";
-                sheet.getCell(currentRowIndex, colMap.operator).values = [[newOp.toString()]];
-                sheet.getCell(currentRowIndex, colMap.workers).values = [[newWork.toString()]];
+                sheet.getCell(adminRowIndex, colMap.operator).values = [[newOp.toString()]];
+                sheet.getCell(adminRowIndex, colMap.workers).values = [[newWork.toString()]];
                 
             } else if (currentAdminAction === "CREATE_NEW") {
                 const op = document.getElementById("admin-create-op").value || "";
@@ -1393,31 +1410,32 @@ document.getElementById("btn-admin-save").onclick = async () => {
                 const sExcel = getExcelDateNumber(newD_cStart);
                 const eExcel = getExcelDateNumber(newD_cEnd);
                 
-                sheet.getCell(currentRowIndex, colMap.operator).values = [[op.toString()]];
-                sheet.getCell(currentRowIndex, colMap.workers).values = [[work.toString()]];
-                sheet.getCell(currentRowIndex, colMap.startGlobal).values = [[sExcel]];
-                sheet.getCell(currentRowIndex, colMap.endGlobal).values = [[eExcel]];
-                sheet.getCell(currentRowIndex, colMap.awarie).values = [[awaria.toString()]];
-                if (colMap.notes !== undefined) sheet.getCell(currentRowIndex, colMap.notes).values = [[notes.toString()]];
+                sheet.getCell(adminRowIndex, colMap.operator).values = [[op.toString()]];
+                sheet.getCell(adminRowIndex, colMap.workers).values = [[work.toString()]];
+                sheet.getCell(adminRowIndex, colMap.startGlobal).values = [[sExcel]];
+                sheet.getCell(adminRowIndex, colMap.endGlobal).values = [[eExcel]];
+                sheet.getCell(adminRowIndex, colMap.awarie).values = [[awaria.toString()]];
+                if (colMap.notes !== undefined) sheet.getCell(adminRowIndex, colMap.notes).values = [[notes.toString()]];
                 
                 const emptyArr = Array(61).fill("");
-                sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart, 1, 61).values = [emptyArr];
+                sheet.getRangeByIndexes(adminRowIndex, colMap.intervalsStart, 1, 61).values = [emptyArr];
                 
                 const wCount = parseFloat(work) || 0;
-                sheet.getCell(currentRowIndex, colMap.intervalsStart + 1).values = [[wCount]];
-                sheet.getCell(currentRowIndex, colMap.intervalsStart + 2).values = [[wCount]];
-                sheet.getCell(currentRowIndex, colMap.intervalsStart + 3).values = [[1]]; 
+                sheet.getCell(adminRowIndex, colMap.intervalsStart + 1).values = [[wCount]];
+                sheet.getCell(adminRowIndex, colMap.intervalsStart + 2).values = [[wCount]];
+                sheet.getCell(adminRowIndex, colMap.intervalsStart + 3).values = [[1]]; 
                 
-                const cellStart = sheet.getCell(currentRowIndex, colMap.intervalsStart + 4);
+                const cellStart = sheet.getCell(adminRowIndex, colMap.intervalsStart + 4);
                 cellStart.values = [[sExcel]]; cellStart.numberFormat = [["yyyy-mm-dd hh:mm"]];
                 
-                const cellEnd = sheet.getCell(currentRowIndex, colMap.intervalsStart + 5);
+                const cellEnd = sheet.getCell(adminRowIndex, colMap.intervalsStart + 5);
                 cellEnd.values = [[eExcel]]; cellEnd.numberFormat = [["yyyy-mm-dd hh:mm"]];
                 
-                await recalculateRowSummary(ctx, sheet, currentRowIndex);
+                await ctx.sync();
+                await recalculateRowSummary(ctx, sheet, adminRowIndex);
                 
             } else if (currentAdminAction === "DEL_ONE" || currentAdminAction === "DEL_MULTI") {
-                let rStart = currentRowIndex;
+                let rStart = adminRowIndex;
                 let rCount = 1;
                 if (currentAdminAction === "DEL_MULTI") {
                     const sel = ctx.workbook.getSelectedRange().load(["rowIndex", "rowCount"]);
@@ -1453,10 +1471,6 @@ document.getElementById("btn-admin-save").onclick = async () => {
             alert("Operacja udana!");
             document.getElementById("admin-action-card").classList.add("hidden");
             document.getElementById("admin-menu-card").classList.remove("hidden");
-            
-            if (currentAdminAction === "START" || currentAdminAction === "END" || currentAdminAction === "OPS" || currentAdminAction === "CREATE_NEW") {
-                document.getElementById("btn-fetch").click();
-            }
         });
     } catch (e) {
         console.error(e);
