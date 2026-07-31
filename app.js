@@ -650,7 +650,7 @@ async function writeStartTime() {
                 if (previousTotalGrossSeconds < 0) previousTotalGrossSeconds = 0;
                 
             } else {
-                const intervalsRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 60).load("values");
+                const intervalsRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 70).load("values");
                 await context.sync();
                 
                 currentIntervalIndex = 9; // domyślnie ostatni jeśli wszystkie zajęte
@@ -1006,8 +1006,8 @@ async function saveIncidents(fullComplete) {
             
             if (fullComplete) {
                 sheet.getCell(currentRowIndex, colMap.endGlobal).values = [[dateNum]];
-                
-                // --- PODSUMOWANIE (3 kolumny na samym końcu przedziałów = intervalsStart + 70) ---
+            }
+            // --- PODSUMOWANIE (3 kolumny na samym końcu przedziałów = intervalsStart + 70) ---
                 const dataRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 70).load("values");
                 await context.sync();
                 
@@ -1071,7 +1071,7 @@ async function saveIncidents(fullComplete) {
                     
                     sheet.getCell(currentRowIndex, summaryStartCol).values = [[safeStr(netTimeHms)]];
                     sheet.getCell(currentRowIndex, summaryStartCol + 1).values = [[safeStr(secondsToHms(totalLoadingSecondsGlobal))]];
-                    sheet.getCell(currentRowIndex, summaryStartCol + 2).values = [[totalBreakMinutes > 0 ? totalBreakMinutes.toString() + " min" : ""]];
+                    sheet.getCell(currentRowIndex, summaryStartCol + 2).values = [[totalBreakMinutes > 0 ? totalBreakMinutes.toString() : ""]];
                     sheet.getCell(currentRowIndex, summaryStartCol + 3).values = [[Math.round(totalKits)]];
                     sheet.getCell(currentRowIndex, summaryStartCol + 4).values = [[Number(avgWorkersFinal.toFixed(2))]];
                 }
@@ -1108,7 +1108,6 @@ async function saveIncidents(fullComplete) {
                     intervalDataRange.format.borders.color = "#a3a3a3";
                     intervalDataRange.format.borders.weight = "Thin";
                 }
-            }
             
             if (colMap.chkBreak !== undefined) sheet.getCell(currentRowIndex, colMap.chkBreak).values = [[totalBreakMinutes > 0 ? totalBreakMinutes.toString() : ""]];
             if (colMap.notes !== undefined) sheet.getCell(currentRowIndex, colMap.notes).values = [[incidentsText]];
@@ -1583,13 +1582,13 @@ document.getElementById("btn-admin-save").onclick = async () => {
                 const excelNum = getExcelDateNumber(newD_start);
                 sheet.getCell(adminRowIndex, colMap.startGlobal).values = [[excelNum]];
                 
-                const intRange = sheet.getRangeByIndexes(adminRowIndex, colMap.intervalsStart + 1, 1, 60).load("values");
+                const intRange = sheet.getRangeByIndexes(adminRowIndex, colMap.intervalsStart + 1, 1, 70).load("values");
                 await ctx.sync();
                 const ivals = intRange.values[0];
                 for (let i = 0; i < 10; i++) {
                     const rolls = parseFloat(ivals[i*6 + 3]) || 0;
                     if (rolls > 0) {
-                        const cell = sheet.getCell(adminRowIndex, colMap.intervalsStart + 1 + i*6 + 4);
+                        const cell = sheet.getCell(adminRowIndex, colMap.intervalsStart + 1 + i*7 + 4);
                         cell.values = [[excelNum]];
                         cell.numberFormat = [["yyyy-mm-dd hh:mm"]];
                         break;
@@ -1614,15 +1613,15 @@ document.getElementById("btn-admin-save").onclick = async () => {
                 const excelNum = getExcelDateNumber(newD_end);
                 sheet.getCell(adminRowIndex, colMap.endGlobal).values = [[excelNum]];
                 
-                const intRange = sheet.getRangeByIndexes(adminRowIndex, colMap.intervalsStart + 1, 1, 60).load("values");
+                const intRange = sheet.getRangeByIndexes(adminRowIndex, colMap.intervalsStart + 1, 1, 70).load("values");
                 await ctx.sync();
                 const ivals = intRange.values[0];
                 let lastIdx = -1;
                 for (let i = 0; i < 10; i++) {
-                    if (ivals[i*6 + 4]) { lastIdx = i; }
+                    if (ivals[i*7 + 4]) { lastIdx = i; }
                 }
                 if (lastIdx >= 0) {
-                    const cell = sheet.getCell(adminRowIndex, colMap.intervalsStart + 1 + lastIdx*6 + 5);
+                    const cell = sheet.getCell(adminRowIndex, colMap.intervalsStart + 1 + lastIdx*7 + 5);
                     cell.values = [[excelNum]];
                     cell.numberFormat = [["yyyy-mm-dd hh:mm"]];
                 }
@@ -1652,7 +1651,7 @@ document.getElementById("btn-admin-save").onclick = async () => {
                 if (colMap.notes !== undefined) sheet.getCell(adminRowIndex, colMap.notes).values = [[notes.toString()]];
                 
                 const emptyArr = Array(61).fill("");
-                sheet.getRangeByIndexes(adminRowIndex, colMap.intervalsStart, 1, 61).values = [emptyArr];
+                sheet.getRangeByIndexes(adminRowIndex, colMap.intervalsStart, 1, 71).values = [emptyArr];
                 
                 const wCount = parseFloat(work) || 0;
                 sheet.getCell(adminRowIndex, colMap.intervalsStart + 1).values = [[wCount]];
@@ -1695,7 +1694,7 @@ document.getElementById("btn-admin-save").onclick = async () => {
                     }
                     
                     const emptyArr = Array(61).fill("");
-                    sheet.getRangeByIndexes(r, colMap.intervalsStart, 1, 61).values = [emptyArr];
+                    sheet.getRangeByIndexes(r, colMap.intervalsStart, 1, 71).values = [emptyArr];
                 }
             }
             
@@ -1721,6 +1720,9 @@ document.getElementById("btn-admin-save").onclick = async () => {
         }
     }
 };
+
+
+
 
 
 
