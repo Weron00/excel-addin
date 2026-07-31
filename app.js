@@ -370,11 +370,8 @@ async function fetchRowData(forcedRowIndex, isCont) {
             totalAwariaSecondsGlobal = hmsToSeconds(vals[colMap.awarie] ? vals[colMap.awarie].toString() : "00:00:00");
             
             let loadedLoadingSeconds = 0;
-            if (colMap.intervalsStart !== undefined) {
-                const summaryStartCol = colMap.intervalsStart - 5;
-                if (summaryStartCol >= 0 && vals[summaryStartCol + 1]) {
-                    loadedLoadingSeconds = hmsToSeconds(vals[summaryStartCol + 1].toString());
-                }
+            if (colMap.loadingTime !== undefined && vals[colMap.loadingTime]) {
+                loadedLoadingSeconds = hmsToSeconds(vals[colMap.loadingTime].toString());
             }
             totalLoadingSecondsGlobal = loadedLoadingSeconds;
             
@@ -885,10 +882,7 @@ function toggleLoading() {
         Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
             sheet.protection.unprotect("ShortP26");
-            const summaryStartCol = colMap.intervalsStart - 5;
-            if (summaryStartCol >= 0) {
-                
-            }
+            
             if (currentIntervalStartCol !== -1) {
                 sheet.getCell(currentRowIndex, currentIntervalStartCol + 6).values = [[safeStr(secondsToHms(currentIntervalLoadingSeconds))]];
             }
@@ -1056,25 +1050,12 @@ async function saveIncidents(fullComplete) {
                 
                 const netTimeHms = secondsToHms(netTimeMs / 1000);
                 
-                // Write summary to 4 columns BEFORE intervalsStart
-                const summaryStartCol = colMap.intervalsStart - 5;
-                if (summaryStartCol >= 0) {
-                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol).values = [["CZAS NETTO"]];
-                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 1).values = [["CZAS ŁADOWANIA"]];
-                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 2).values = [["CZAS PRZERW"]];
-                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 3).values = [["SUMA KITÓW"]];
-                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 4).values = [["ŚREDNIA PRACOWNIKÓW"]];
-                    
-                    // Wymuszamy format liczbowy/ogólny w Excelu dla wyników
-                    const sumRange = sheet.getRangeByIndexes(currentRowIndex, summaryStartCol, 1, 5);
-                    sumRange.numberFormat = [["@", "@", "@", "0", "0.00"]];
-                    
-                    sheet.getCell(currentRowIndex, summaryStartCol).values = [[safeStr(netTimeHms)]];
-                    sheet.getCell(currentRowIndex, summaryStartCol + 1).values = [[safeStr(secondsToHms(totalLoadingSecondsGlobal))]];
-                    sheet.getCell(currentRowIndex, summaryStartCol + 2).values = [[totalBreakMinutes > 0 ? totalBreakMinutes.toString() : ""]];
-                    sheet.getCell(currentRowIndex, summaryStartCol + 3).values = [[Math.round(totalKits)]];
-                    sheet.getCell(currentRowIndex, summaryStartCol + 4).values = [[Number(avgWorkersFinal.toFixed(2))]];
-                }
+                // Write summary to explicitly mapped columns
+                if (colMap.netTime !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.netTime); c.values = [[safeStr(netTimeHms)]]; c.numberFormat = [["@"]]; }
+                if (colMap.loadingTime !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.loadingTime); c.values = [[safeStr(secondsToHms(totalLoadingSecondsGlobal))]]; c.numberFormat = [["@"]]; }
+                if (colMap.breakTime !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.breakTime); c.values = [[totalBreakMinutes > 0 ? totalBreakMinutes.toString() : ""]]; c.numberFormat = [["@"]]; }
+                if (colMap.totalKits !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.totalKits); c.values = [[Math.round(totalKits)]]; c.numberFormat = [["0"]]; }
+                if (colMap.avgWorkers !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.avgWorkers); c.values = [[Number(avgWorkersFinal.toFixed(2))]]; c.numberFormat = [["0.00"]]; }
                 
                 // Generowanie nagłówków i obramowań dla wykorzystanych przedziałów
                 if (colMap.intervalsStart !== undefined && currentIntervalIndex >= 0) {
@@ -1347,11 +1328,8 @@ async function recalculateRowSummary(ctx, sheet, rowIdx) {
     
     const netTimeHms = secondsToHms(netTimeMs / 1000);
     
-    const summaryStartCol = colMap.intervalsStart - 5;
-    if (summaryStartCol >= 0) {
-        sheet.getCell(rowIdx, summaryStartCol).values = [[safeStr(netTimeHms)]];
-        sheet.getCell(rowIdx, summaryStartCol + 4).values = [[Number(avgWorkersFinal.toFixed(2))]];
-    }
+    if (colMap.netTime !== undefined) { sheet.getCell(rowIdx, colMap.netTime).values = [[safeStr(netTimeHms)]]; }
+    if (colMap.avgWorkers !== undefined) { sheet.getCell(rowIdx, colMap.avgWorkers).values = [[Number(avgWorkersFinal.toFixed(2))]]; }
 }
 
 document.getElementById("btn-admin-edit-start").onclick = async () => {
@@ -1688,10 +1666,11 @@ document.getElementById("btn-admin-save").onclick = async () => {
                     if (colMap.chkMat !== undefined) sheet.getCell(r, colMap.chkMat).values = [[""]];
                     if (colMap.chkBreak !== undefined) sheet.getCell(r, colMap.chkBreak).values = [[""]];
                     
-                    const summaryStartCol = colMap.intervalsStart - 5;
-                    if (summaryStartCol >= 0) {
-                        sheet.getRangeByIndexes(r, summaryStartCol, 1, 5).values = [["", "", "", "", ""]];
-                    }
+                    if (colMap.netTime !== undefined) sheet.getCell(r, colMap.netTime).values = [[""]];
+                    if (colMap.loadingTime !== undefined) sheet.getCell(r, colMap.loadingTime).values = [[""]];
+                    if (colMap.breakTime !== undefined) sheet.getCell(r, colMap.breakTime).values = [[""]];
+                    if (colMap.totalKits !== undefined) sheet.getCell(r, colMap.totalKits).values = [[""]];
+                    if (colMap.avgWorkers !== undefined) sheet.getCell(r, colMap.avgWorkers).values = [[""]];
                     
                     const emptyArr = Array(61).fill("");
                     sheet.getRangeByIndexes(r, colMap.intervalsStart, 1, 71).values = [emptyArr];
@@ -1720,6 +1699,8 @@ document.getElementById("btn-admin-save").onclick = async () => {
         }
     }
 };
+
+
 
 
 
