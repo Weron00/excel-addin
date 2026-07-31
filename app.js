@@ -97,6 +97,7 @@ let loadingTimerInterval = null;
 let loadingSecondsElapsed = 0;
 let totalLoadingSecondsGlobal = 0;
 let currentIntervalLoadingSeconds = 0;
+let loadedBreakMinutes = 0;
 
 function safeStr(val) {
     if (val === undefined || val === null) return "";
@@ -377,6 +378,13 @@ async function fetchRowData(forcedRowIndex, isCont) {
             }
             totalLoadingSecondsGlobal = loadedLoadingSeconds;
             
+            if (colMap.chkBreak !== undefined && vals[colMap.chkBreak]) {
+                loadedBreakMinutes = parseInt(vals[colMap.chkBreak].toString()) || 0;
+            } else {
+                loadedBreakMinutes = 0;
+            }
+            document.querySelectorAll(".break-chk").forEach(chk => chk.checked = false);
+
             const existingNotes = vals[colMap.notes] ? vals[colMap.notes].toString() : "";
             document.getElementById("in-other-incidents").value = existingNotes;
             document.getElementById("in-running-notes").value = existingNotes;
@@ -972,8 +980,12 @@ function handleStop() {
 }
 
 async function saveIncidents(fullComplete) {
-    const material = document.getElementById("chk-material").checked;
-    const breakTime = document.getElementById("chk-break").checked;
+    let newlyCheckedMinutes = 0;
+    document.querySelectorAll(".break-chk:checked").forEach(chk => {
+        newlyCheckedMinutes += parseInt(chk.value) || 0;
+    });
+    const totalBreakMinutes = loadedBreakMinutes + newlyCheckedMinutes;
+    const totalBreakMs = totalBreakMinutes * 60 * 1000;
     const incidentsText = document.getElementById("in-other-incidents").value;
     
     try {
@@ -1034,7 +1046,7 @@ async function saveIncidents(fullComplete) {
                 }
                 
                 const totalAwariaMs = totalAwariaSecondsGlobal * 1000;
-                let netTimeMs = totalTimeMs - totalAwariaMs;
+                let netTimeMs = totalTimeMs - totalAwariaMs - totalBreakMs;
                 if (netTimeMs < 0) netTimeMs = 0;
                 
                 let avgWorkersFinal = 0;
@@ -1096,8 +1108,7 @@ async function saveIncidents(fullComplete) {
                 }
             }
             
-            if (colMap.chkMat !== undefined) sheet.getCell(currentRowIndex, colMap.chkMat).values = [[material ? "TAK" : ""]];
-            if (colMap.chkBreak !== undefined) sheet.getCell(currentRowIndex, colMap.chkBreak).values = [[breakTime ? "TAK" : ""]];
+            if (colMap.chkBreak !== undefined) sheet.getCell(currentRowIndex, colMap.chkBreak).values = [[totalBreakMinutes > 0 ? totalBreakMinutes.toString() : ""]];
             if (colMap.notes !== undefined) sheet.getCell(currentRowIndex, colMap.notes).values = [[incidentsText]];
             
             sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
@@ -1282,7 +1293,7 @@ function parseAdminDateStr(str) {
 }
 
 async function recalculateRowSummary(ctx, sheet, rowIdx) {
-    const dataRange = sheet.getRangeByIndexes(rowIdx, colMap.intervalsStart + 1, 1, 60).load("values");
+    const dataRange = sheet.getRangeByIndexes(rowIdx, colMap.intervalsStart + 1, 1, 70).load("values");
     await ctx.sync();
     
     const ivals = dataRange.values[0];
@@ -1290,10 +1301,10 @@ async function recalculateRowSummary(ctx, sheet, rowIdx) {
     let sumWorkerTime = 0;
     
     for (let i = 0; i < 10; i++) {
-        const wStart = parseFloat(ivals[i*6 + 1]);
-        const wStop = parseFloat(ivals[i*6 + 2]);
-        const startStr = ivals[i*6 + 4] ? ivals[i*6 + 4].toString().replace(/^'/, "") : "";
-        const stopStr = ivals[i*6 + 5] ? ivals[i*6 + 5].toString().replace(/^'/, "") : "";
+        const wStart = parseFloat(ivals[i*7 + 1]);
+        const wStop = parseFloat(ivals[i*7 + 2]);
+        const startStr = ivals[i*7 + 4] ? ivals[i*7 + 4].toString().replace(/^['\s]+|['\s]+$/g, "") : "";
+        const stopStr = ivals[i*7 + 5] ? ivals[i*7 + 5].toString().replace(/^['\s]+|['\s]+$/g, "") : "";
         
         if (startStr && stopStr) {
             const tStart = parseCustomDate(startStr);
@@ -1310,11 +1321,22 @@ async function recalculateRowSummary(ctx, sheet, rowIdx) {
     }
     
     const awariaCell = sheet.getCell(rowIdx, colMap.awarie).load("values");
-    await ctx.sync();
+    let breakCellStr = "0";
+    if (colMap.chkBreak !== undefined) {
+        const breakCell = sheet.getCell(rowIdx, colMap.chkBreak).load("values");
+        await ctx.sync();
+        breakCellStr = breakCell.values[0][0] ? breakCell.values[0][0].toString() : "0";
+    } else {
+        await ctx.sync();
+    }
+    
     const awariaStr = awariaCell.values[0][0] ? awariaCell.values[0][0].toString() : "00:00:00";
     const totalAwariaMs = hmsToSeconds(awariaStr) * 1000;
     
-    let netTimeMs = totalTimeMs - totalAwariaMs;
+    const totalBreakMinutes = parseInt(breakCellStr) || 0;
+    const totalBreakMs = totalBreakMinutes * 60 * 1000;
+    
+    let netTimeMs = totalTimeMs - totalAwariaMs - totalBreakMs;
     if (netTimeMs < 0) netTimeMs = 0;
     
     let avgWorkersFinal = 0;
@@ -1697,6 +1719,12 @@ document.getElementById("btn-admin-save").onclick = async () => {
         }
     }
 };
+
+
+
+
+
+
 
 
 

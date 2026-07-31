@@ -131,9 +131,19 @@
 
         <div id="incidents-card" class="card hidden">
             <h3 style="margin: 0 0 12px 0; font-size: 15px;">Podsumowanie i Incydenty</h3>
-            <div class="checkbox-group">
-                <label><input type="checkbox" id="chk-material"> Zmiana materiału</label>
-                <label><input type="checkbox" id="chk-break"> Przerwa w trakcie</label>
+            <div class="breaks-group" style="margin-bottom: 12px; background: #f9fafb; padding: 10px; border-radius: 8px; border: 1px solid #e5e7eb;">
+                <div style="font-weight: bold; font-size: 13px; margin-bottom: 6px;">Zmiana 1 (Przerwy):</div>
+                <div style="display: flex; gap: 12px; font-size: 12px; margin-bottom: 10px;">
+                    <label><input type="checkbox" id="chk-b1-5" class="break-chk" value="5"> 5 min</label>
+                    <label><input type="checkbox" id="chk-b1-10" class="break-chk" value="10"> 10 min</label>
+                    <label><input type="checkbox" id="chk-b1-20" class="break-chk" value="20"> 20 min</label>
+                </div>
+                <div style="font-weight: bold; font-size: 13px; margin-bottom: 6px;">Zmiana 2 (Przerwy):</div>
+                <div style="display: flex; gap: 12px; font-size: 12px;">
+                    <label><input type="checkbox" id="chk-b2-5" class="break-chk" value="5"> 5 min</label>
+                    <label><input type="checkbox" id="chk-b2-10" class="break-chk" value="10"> 10 min</label>
+                    <label><input type="checkbox" id="chk-b2-20" class="break-chk" value="20"> 20 min</label>
+                </div>
             </div>
             <div class="input-group">
                 <label for="in-other-incidents">Inne incydenty (Opis)</label>
@@ -263,6 +273,6 @@
         </div>
 
     </div>
-    <script src="app.js?v=29"></script>
+    <script src="app.js?v=30"></script>
 </body>
 </html>
