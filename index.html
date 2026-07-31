@@ -104,9 +104,11 @@
 
             <div class="timer-display" id="timer" style="margin-bottom:8px; padding:10px;">00:00:00</div>
             <div id="awaria-timer" class="timer-display awaria-timer hidden" style="margin-bottom:8px; padding:10px;">00:00:00</div>
+            <div id="loading-timer" class="timer-display loading-timer hidden" style="margin-bottom:8px; padding:10px;">00:00:00</div>
             
-            <div class="actions" style="margin-bottom:4px;">
-                <button id="btn-awaria" class="btn-action awaria">STAN AWARII</button>
+            <div class="actions" style="margin-bottom:4px; display:flex; gap:8px;">
+                <button id="btn-awaria" class="btn-action awaria" style="flex:1;">STAN AWARII</button>
+                <button id="btn-loading" class="btn-action loading" style="flex:1;">ŁADOWANIE MAT.</button>
             </div>
             
             <div class="input-group" style="margin-bottom: 4px;">
@@ -261,6 +263,6 @@
         </div>
 
     </div>
-    <script src="app.js?v=27"></script>
+    <script src="app.js?v=28"></script>
 </body>
 </html>

@@ -22,6 +22,7 @@ Office.onReady((info) => {
     
     // Awarie
     document.getElementById("btn-awaria").onclick = toggleAwaria;
+    document.getElementById("btn-loading").onclick = toggleLoading;
     
     // Pracownicy
     document.getElementById("btn-add-worker").onclick = () => adjustWorkers(1);
@@ -89,6 +90,12 @@ let isAwariaActive = false;
 let awariaTimerInterval = null;
 let awariaSecondsElapsed = 0;
 let totalAwariaSecondsGlobal = 0;
+
+// Ładowanie materiału
+let isLoadingActive = false;
+let loadingTimerInterval = null;
+let loadingSecondsElapsed = 0;
+let totalLoadingSecondsGlobal = 0;
 
 function safeStr(val) {
     if (val === undefined || val === null) return "";
@@ -359,6 +366,15 @@ async function fetchRowData(forcedRowIndex, isCont) {
             previousGlobalWorkerString = currentWorkerGlobalString; // Zachowaj historię
             currentOperatorGlobalString = vals[colMap.operator] ? vals[colMap.operator].toString() : "";
             totalAwariaSecondsGlobal = hmsToSeconds(vals[colMap.awarie] ? vals[colMap.awarie].toString() : "00:00:00");
+            
+            let loadedLoadingSeconds = 0;
+            if (colMap.intervalsStart !== undefined) {
+                const summaryStartCol = colMap.intervalsStart - 4;
+                if (summaryStartCol >= 0 && vals[summaryStartCol + 1]) {
+                    loadedLoadingSeconds = hmsToSeconds(vals[summaryStartCol + 1].toString());
+                }
+            }
+            totalLoadingSecondsGlobal = loadedLoadingSeconds;
             
             const existingNotes = vals[colMap.notes] ? vals[colMap.notes].toString() : "";
             document.getElementById("in-other-incidents").value = existingNotes;
@@ -817,7 +833,46 @@ function toggleAwaria() {
             sheet.getCell(currentRowIndex, colMap.awarie).values = [[safeStr(secondsToHms(totalAwariaSecondsGlobal))]];
             sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
             await ctx.sync();
-                    }).catch(e => console.warn(e));
+        }).catch(e => console.warn(e));
+    }
+}
+
+function toggleLoading() {
+    isLoadingActive = !isLoadingActive;
+    const btn = document.getElementById("btn-loading");
+    const timerUI = document.getElementById("loading-timer");
+    
+    if (isLoadingActive) {
+        document.body.classList.add("loading-active");
+        btn.innerText = "ZAKOŃCZ ŁADOWANIE";
+        timerUI.classList.remove("hidden");
+        
+        loadingSecondsElapsed = 0;
+        timerUI.innerText = secondsToHms(0);
+        
+        loadingTimerInterval = setInterval(() => {
+            loadingSecondsElapsed++;
+            timerUI.innerText = secondsToHms(loadingSecondsElapsed);
+        }, 1000);
+    } else {
+        document.body.classList.remove("loading-active");
+        btn.innerText = "ŁADOWANIE MAT.";
+        timerUI.classList.add("hidden");
+        clearInterval(loadingTimerInterval);
+        
+        totalLoadingSecondsGlobal += loadingSecondsElapsed;
+        loadingSecondsElapsed = 0;
+        
+        Excel.run(async (ctx) => {
+            const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+            sheet.protection.unprotect("ShortP26");
+            const summaryStartCol = colMap.intervalsStart - 4;
+            if (summaryStartCol >= 0) {
+                sheet.getCell(currentRowIndex, summaryStartCol + 1).values = [[safeStr(secondsToHms(totalLoadingSecondsGlobal))]];
+            }
+            sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
+            await ctx.sync();
+        }).catch(e => console.warn(e));
     }
 }
 
@@ -881,6 +936,10 @@ async function confirmChangeRolls() {
 function handleStop() {
     if (isAwariaActive) {
         alert("Najpierw wyłącz Stan Awarii!");
+        return;
+    }
+    if (isLoadingActive) {
+        alert("Najpierw zakończ Ładowanie Materiału!");
         return;
     }
     clearInterval(timerInterval);
@@ -970,20 +1029,22 @@ async function saveIncidents(fullComplete) {
                 
                 const netTimeHms = secondsToHms(netTimeMs / 1000);
                 
-                // Write summary to 3 columns BEFORE intervalsStart
-                const summaryStartCol = colMap.intervalsStart - 3;
+                // Write summary to 4 columns BEFORE intervalsStart
+                const summaryStartCol = colMap.intervalsStart - 4;
                 if (summaryStartCol >= 0) {
                     sheet.getCell(dataStartRowIndex - 1, summaryStartCol).values = [["CZAS NETTO"]];
-                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 1).values = [["SUMA KITÓW"]];
-                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 2).values = [["ŚREDNIA PRACOWNIKÓW"]];
+                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 1).values = [["CZAS ŁADOWANIA"]];
+                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 2).values = [["SUMA KITÓW"]];
+                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 3).values = [["ŚREDNIA PRACOWNIKÓW"]];
                     
                     // Wymuszamy format liczbowy/ogólny w Excelu dla wyników
-                    const sumRange = sheet.getRangeByIndexes(currentRowIndex, summaryStartCol, 1, 3);
-                    sumRange.numberFormat = [["@", "0", "0.00"]];
+                    const sumRange = sheet.getRangeByIndexes(currentRowIndex, summaryStartCol, 1, 4);
+                    sumRange.numberFormat = [["@", "@", "0", "0.00"]];
                     
                     sheet.getCell(currentRowIndex, summaryStartCol).values = [[safeStr(netTimeHms)]];
-                    sheet.getCell(currentRowIndex, summaryStartCol + 1).values = [[Math.round(totalKits)]];
-                    sheet.getCell(currentRowIndex, summaryStartCol + 2).values = [[Number(avgWorkersFinal.toFixed(2))]];
+                    sheet.getCell(currentRowIndex, summaryStartCol + 1).values = [[safeStr(secondsToHms(totalLoadingSecondsGlobal))]];
+                    sheet.getCell(currentRowIndex, summaryStartCol + 2).values = [[Math.round(totalKits)]];
+                    sheet.getCell(currentRowIndex, summaryStartCol + 3).values = [[Number(avgWorkersFinal.toFixed(2))]];
                 }
                 
                 // Generowanie nagłówków i obramowań dla wykorzystanych przedziałów
@@ -1039,13 +1100,18 @@ async function saveIncidents(fullComplete) {
 function resetUI() {
     clearInterval(timerInterval);
     clearInterval(awariaTimerInterval);
+    clearInterval(loadingTimerInterval);
     stopAutoSave();
     
     isAwariaActive = false;
+    isLoadingActive = false;
     document.body.classList.remove("awaria-active");
+    document.body.classList.remove("loading-active");
     document.body.classList.remove("timer-active");
     document.getElementById("awaria-timer").classList.add("hidden");
+    document.getElementById("loading-timer").classList.add("hidden");
     document.getElementById("btn-awaria").innerText = "STAN AWARII";
+    document.getElementById("btn-loading").innerText = "ŁADOWANIE MAT.";
     document.getElementById("change-rolls-panel").classList.add("hidden");
     
     document.getElementById("data-card").classList.add("hidden");
@@ -1242,10 +1308,10 @@ async function recalculateRowSummary(ctx, sheet, rowIdx) {
     
     const netTimeHms = secondsToHms(netTimeMs / 1000);
     
-    const summaryStartCol = colMap.intervalsStart - 3;
+    const summaryStartCol = colMap.intervalsStart - 4;
     if (summaryStartCol >= 0) {
         sheet.getCell(rowIdx, summaryStartCol).values = [[safeStr(netTimeHms)]];
-        sheet.getCell(rowIdx, summaryStartCol + 2).values = [[Number(avgWorkersFinal.toFixed(2))]];
+        sheet.getCell(rowIdx, summaryStartCol + 3).values = [[Number(avgWorkersFinal.toFixed(2))]];
     }
 }
 
@@ -1583,9 +1649,9 @@ document.getElementById("btn-admin-save").onclick = async () => {
                     if (colMap.chkMat !== undefined) sheet.getCell(r, colMap.chkMat).values = [[""]];
                     if (colMap.chkBreak !== undefined) sheet.getCell(r, colMap.chkBreak).values = [[""]];
                     
-                    const summaryStartCol = colMap.intervalsStart - 3;
+                    const summaryStartCol = colMap.intervalsStart - 4;
                     if (summaryStartCol >= 0) {
-                        sheet.getRangeByIndexes(r, summaryStartCol, 1, 3).values = [["", "", ""]];
+                        sheet.getRangeByIndexes(r, summaryStartCol, 1, 4).values = [["", "", "", ""]];
                     }
                     
                     const emptyArr = Array(61).fill("");
@@ -1615,3 +1681,5 @@ document.getElementById("btn-admin-save").onclick = async () => {
         }
     }
 };
+
+
