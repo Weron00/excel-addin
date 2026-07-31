@@ -96,6 +96,7 @@ let isLoadingActive = false;
 let loadingTimerInterval = null;
 let loadingSecondsElapsed = 0;
 let totalLoadingSecondsGlobal = 0;
+let currentIntervalLoadingSeconds = 0;
 
 function safeStr(val) {
     if (val === undefined || val === null) return "";
@@ -390,9 +391,9 @@ async function fetchRowData(forcedRowIndex, isCont) {
             if (colMap.intervalsStart !== undefined) {
                 const intervalsStartStatus = vals[colMap.intervalsStart] ? vals[colMap.intervalsStart].toString().trim() : "";
                 for (let i = 0; i < 10; i++) {
-                    const startIdx = colMap.intervalsStart + 1 + (i * 6) + 4;
-                    const stopIdx = colMap.intervalsStart + 1 + (i * 6) + 5;
-                    const rlsIdx = colMap.intervalsStart + 1 + (i * 6) + 3;
+                    const startIdx = colMap.intervalsStart + 1 + (i * 7) + 4;
+                    const stopIdx = colMap.intervalsStart + 1 + (i * 7) + 5;
+                    const rlsIdx = colMap.intervalsStart + 1 + (i * 7) + 3;
                     
                     const startStr = vals[startIdx] ? vals[startIdx].toString().replace(/^'/, "") : "";
                     const stopStr = vals[stopIdx] ? vals[stopIdx].toString().replace(/^'/, "") : "";
@@ -419,8 +420,8 @@ async function fetchRowData(forcedRowIndex, isCont) {
                     if (intervalsStartStatus !== "ZAMKNIĘTO") {
                         lastIntervalUnexpected = true;
                         // Odejmujemy czas tego przedziału od zsumowanego gross
-                        const uStartStr = vals[colMap.intervalsStart + 1 + (lastIntervalIndex * 6) + 4] ? vals[colMap.intervalsStart + 1 + (lastIntervalIndex * 6) + 4].toString().replace(/^'/, "") : "";
-                        const uStopStr = vals[colMap.intervalsStart + 1 + (lastIntervalIndex * 6) + 5] ? vals[colMap.intervalsStart + 1 + (lastIntervalIndex * 6) + 5].toString().replace(/^'/, "") : "";
+                        const uStartStr = vals[colMap.intervalsStart + 1 + (lastIntervalIndex * 7) + 4] ? vals[colMap.intervalsStart + 1 + (lastIntervalIndex * 7) + 4].toString().replace(/^'/, "") : "";
+                        const uStopStr = vals[colMap.intervalsStart + 1 + (lastIntervalIndex * 7) + 5] ? vals[colMap.intervalsStart + 1 + (lastIntervalIndex * 7) + 5].toString().replace(/^'/, "") : "";
                         if (uStartStr && uStopStr) {
                             const tuStart = parseCustomDate(uStartStr);
                             const tuStop = parseCustomDate(uStopStr);
@@ -613,7 +614,7 @@ async function writeStartTime() {
             // Znajdowanie przedziału
             if (resumeUnexpected && lastIntervalIndex >= 0) {
                 currentIntervalIndex = lastIntervalIndex;
-                currentIntervalStartCol = colMap.intervalsStart + 1 + (currentIntervalIndex * 6);
+                currentIntervalStartCol = colMap.intervalsStart + 1 + (currentIntervalIndex * 7);
                 
                 // Read Start Time to calculate secondsElapsed accurately
                 const startCell = sheet.getCell(currentRowIndex, currentIntervalStartCol + 4).load("values");
@@ -627,6 +628,15 @@ async function writeStartTime() {
                     secondsElapsed = 0;
                 }
                 
+                const loadingCell = sheet.getCell(currentRowIndex, currentIntervalStartCol + 6).load("values");
+                await context.sync();
+                const lVal = loadingCell.values[0][0] ? loadingCell.values[0][0].toString() : "";
+                if (lVal) {
+                    currentIntervalLoadingSeconds = hmsToSeconds(lVal);
+                } else {
+                    currentIntervalLoadingSeconds = 0;
+                }
+                
                 // Odejmujemy czas nieoczekiwanego zamknięcia z previousTotalGrossSeconds, żeby nie policzyć go podwójnie!
                 previousTotalGrossSeconds -= unexpectedIntervalDuration;
                 if (previousTotalGrossSeconds < 0) previousTotalGrossSeconds = 0;
@@ -637,13 +647,13 @@ async function writeStartTime() {
                 
                 currentIntervalIndex = 9; // domyślnie ostatni jeśli wszystkie zajęte
                 for (let i = 0; i < 10; i++) {
-                    const startCellVal = intervalsRange.values[0][i * 6 + 4] ? intervalsRange.values[0][i * 6 + 4].toString().trim() : "";
+                    const startCellVal = intervalsRange.values[0][i * 7 + 4] ? intervalsRange.values[0][i * 7 + 4].toString().trim() : "";
                     if (startCellVal === "") {
                         currentIntervalIndex = i;
                         break;
                     }
                 }
-                currentIntervalStartCol = colMap.intervalsStart + 1 + (currentIntervalIndex * 6);
+                currentIntervalStartCol = colMap.intervalsStart + 1 + (currentIntervalIndex * 7);
                 const startIntCell = sheet.getCell(currentRowIndex, currentIntervalStartCol + 4);
                 startIntCell.values = [[dateNum]];
                 startIntCell.numberFormat = [["yyyy-mm-dd hh:mm"]];
@@ -861,6 +871,7 @@ function toggleLoading() {
         clearInterval(loadingTimerInterval);
         
         totalLoadingSecondsGlobal += loadingSecondsElapsed;
+        currentIntervalLoadingSeconds += loadingSecondsElapsed;
         loadingSecondsElapsed = 0;
         
         Excel.run(async (ctx) => {
@@ -869,6 +880,9 @@ function toggleLoading() {
             const summaryStartCol = colMap.intervalsStart - 4;
             if (summaryStartCol >= 0) {
                 sheet.getCell(currentRowIndex, summaryStartCol + 1).values = [[safeStr(secondsToHms(totalLoadingSecondsGlobal))]];
+            }
+            if (currentIntervalStartCol !== -1) {
+                sheet.getCell(currentRowIndex, currentIntervalStartCol + 6).values = [[safeStr(secondsToHms(currentIntervalLoadingSeconds))]];
             }
             sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
             await ctx.sync();
@@ -899,8 +913,9 @@ async function confirmChangeRolls() {
             
             // Ustal nowy index przedziału
             currentIntervalIndex++;
+            currentIntervalLoadingSeconds = 0;
             if (currentIntervalIndex > 9) currentIntervalIndex = 9; // Overwrite last
-            currentIntervalStartCol = colMap.intervalsStart + 1 + (currentIntervalIndex * 6);
+            currentIntervalStartCol = colMap.intervalsStart + 1 + (currentIntervalIndex * 7);
             
             // Zapis nowego przedziału
             const operator = document.getElementById("in-operator").value.trim() || "Brak";
@@ -1049,15 +1064,16 @@ async function saveIncidents(fullComplete) {
                 
                 // Generowanie nagłówków i obramowań dla wykorzystanych przedziałów
                 if (colMap.intervalsStart !== undefined && currentIntervalIndex >= 0) {
-                    const usedColsCount = (currentIntervalIndex + 1) * 6;
+                    const usedColsCount = (currentIntervalIndex + 1) * 7;
                     for (let i = 0; i <= currentIntervalIndex; i++) {
-                        const sCol = colMap.intervalsStart + 1 + (i * 6);
+                        const sCol = colMap.intervalsStart + 1 + (i * 7);
                         sheet.getCell(dataStartRowIndex - 1, sCol + 0).values = [[`Operator ${i+1}`]];
                         sheet.getCell(dataStartRowIndex - 1, sCol + 1).values = [[`Prac. Start ${i+1}`]];
                         sheet.getCell(dataStartRowIndex - 1, sCol + 2).values = [[`Prac. Koniec ${i+1}`]];
                         sheet.getCell(dataStartRowIndex - 1, sCol + 3).values = [[`Rolki ${i+1}`]];
                         sheet.getCell(dataStartRowIndex - 1, sCol + 4).values = [[`Start ${i+1}`]];
                         sheet.getCell(dataStartRowIndex - 1, sCol + 5).values = [[`Koniec ${i+1}`]];
+                        sheet.getCell(dataStartRowIndex - 1, sCol + 6).values = [[`Ładowanie Mat. ${i+1}`]];
                     }
                     
                     const intervalHeaderRange = sheet.getRangeByIndexes(dataStartRowIndex - 1, colMap.intervalsStart + 1, 1, usedColsCount);
@@ -1681,5 +1697,7 @@ document.getElementById("btn-admin-save").onclick = async () => {
         }
     }
 };
+
+
 
 
