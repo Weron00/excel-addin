@@ -363,7 +363,7 @@ async function fetchRowData(forcedRowIndex, isCont) {
             document.getElementById("in-operator").value = "";
             document.getElementById("in-workers").value = "4";
             
-            selectedMachineForContinuation = vals[colMap.machine] ? vals[colMap.machine].toString() : "";
+            selectedMachineForContinuation = vals[colMap.machine] ? vals[colMap.machine].toString().trim() : "";
             currentWorkerGlobalString = vals[colMap.workers] ? vals[colMap.workers].toString() : "";
             previousGlobalWorkerString = currentWorkerGlobalString; // Zachowaj historię
             currentOperatorGlobalString = vals[colMap.operator] ? vals[colMap.operator].toString() : "";
@@ -530,7 +530,7 @@ async function showMachineSelection() {
                 opt.value = s.name;
                 opt.text = s.name;
                 
-                if (isContinuing && selectedMachineForContinuation && s.name === selectedMachineForContinuation) {
+                if (isContinuing && selectedMachineForContinuation && s.name.trim() === selectedMachineForContinuation) {
                     opt.selected = true;
                 } else if (!isContinuing && s.name === activeSheetName) {
                     opt.selected = true;
@@ -1007,8 +1007,8 @@ async function saveIncidents(fullComplete) {
             if (fullComplete) {
                 sheet.getCell(currentRowIndex, colMap.endGlobal).values = [[dateNum]];
                 
-                // --- PODSUMOWANIE (3 kolumny na samym końcu przedziałów = intervalsStart + 60) ---
-                const dataRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 60).load("values");
+                // --- PODSUMOWANIE (3 kolumny na samym końcu przedziałów = intervalsStart + 70) ---
+                const dataRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 70).load("values");
                 await context.sync();
                 
                 const ivals = dataRange.values[0];
@@ -1019,14 +1019,14 @@ async function saveIncidents(fullComplete) {
                 const kitsPerLayer = parseFloat(document.getElementById("val-kpl").textContent) || 0;
                 
                 for (let i = 0; i < 10; i++) {
-                    const wStart = parseFloat(ivals[i*6 + 1]);
-                    const wStop = parseFloat(ivals[i*6 + 2]);
-                    const rolls = parseFloat(ivals[i*6 + 3]) || 0;
-                    const startStr = ivals[i*6 + 4] ? ivals[i*6 + 4].toString().replace(/^'/, "") : "";
-                    const stopStr = ivals[i*6 + 5] ? ivals[i*6 + 5].toString().replace(/^'/, "") : "";
+                    const wStart = parseFloat(ivals[i*7 + 1]);
+                    const wStop = parseFloat(ivals[i*7 + 2]);
+                    const rolls = parseFloat(ivals[i*7 + 3]) || 0;
+                    const startStr = ivals[i*7 + 4] ? ivals[i*7 + 4].toString().replace(/^'/, "") : "";
+                    const stopStr = ivals[i*7 + 5] ? ivals[i*7 + 5].toString().replace(/^'/, "") : "";
                     
                     if (startStr && rolls > 0) {
-                        if (i === 0 || rolls !== parseFloat(ivals[(i-1)*6 + 3])) {
+                        if (i === 0 || rolls !== parseFloat(ivals[(i-1)*7 + 3])) {
                             totalKits += (rolls * kitsPerLayer);
                         }
                     }
@@ -1719,6 +1719,7 @@ document.getElementById("btn-admin-save").onclick = async () => {
         }
     }
 };
+
 
 
 
