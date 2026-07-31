@@ -371,7 +371,7 @@ async function fetchRowData(forcedRowIndex, isCont) {
             
             let loadedLoadingSeconds = 0;
             if (colMap.intervalsStart !== undefined) {
-                const summaryStartCol = colMap.intervalsStart - 4;
+                const summaryStartCol = colMap.intervalsStart - 5;
                 if (summaryStartCol >= 0 && vals[summaryStartCol + 1]) {
                     loadedLoadingSeconds = hmsToSeconds(vals[summaryStartCol + 1].toString());
                 }
@@ -885,9 +885,9 @@ function toggleLoading() {
         Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
             sheet.protection.unprotect("ShortP26");
-            const summaryStartCol = colMap.intervalsStart - 4;
+            const summaryStartCol = colMap.intervalsStart - 5;
             if (summaryStartCol >= 0) {
-                sheet.getCell(currentRowIndex, summaryStartCol + 1).values = [[safeStr(secondsToHms(totalLoadingSecondsGlobal))]];
+                
             }
             if (currentIntervalStartCol !== -1) {
                 sheet.getCell(currentRowIndex, currentIntervalStartCol + 6).values = [[safeStr(secondsToHms(currentIntervalLoadingSeconds))]];
@@ -1057,21 +1057,23 @@ async function saveIncidents(fullComplete) {
                 const netTimeHms = secondsToHms(netTimeMs / 1000);
                 
                 // Write summary to 4 columns BEFORE intervalsStart
-                const summaryStartCol = colMap.intervalsStart - 4;
+                const summaryStartCol = colMap.intervalsStart - 5;
                 if (summaryStartCol >= 0) {
                     sheet.getCell(dataStartRowIndex - 1, summaryStartCol).values = [["CZAS NETTO"]];
                     sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 1).values = [["CZAS ŁADOWANIA"]];
-                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 2).values = [["SUMA KITÓW"]];
-                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 3).values = [["ŚREDNIA PRACOWNIKÓW"]];
+                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 2).values = [["CZAS PRZERW"]];
+                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 3).values = [["SUMA KITÓW"]];
+                    sheet.getCell(dataStartRowIndex - 1, summaryStartCol + 4).values = [["ŚREDNIA PRACOWNIKÓW"]];
                     
                     // Wymuszamy format liczbowy/ogólny w Excelu dla wyników
-                    const sumRange = sheet.getRangeByIndexes(currentRowIndex, summaryStartCol, 1, 4);
-                    sumRange.numberFormat = [["@", "@", "0", "0.00"]];
+                    const sumRange = sheet.getRangeByIndexes(currentRowIndex, summaryStartCol, 1, 5);
+                    sumRange.numberFormat = [["@", "@", "@", "0", "0.00"]];
                     
                     sheet.getCell(currentRowIndex, summaryStartCol).values = [[safeStr(netTimeHms)]];
                     sheet.getCell(currentRowIndex, summaryStartCol + 1).values = [[safeStr(secondsToHms(totalLoadingSecondsGlobal))]];
-                    sheet.getCell(currentRowIndex, summaryStartCol + 2).values = [[Math.round(totalKits)]];
-                    sheet.getCell(currentRowIndex, summaryStartCol + 3).values = [[Number(avgWorkersFinal.toFixed(2))]];
+                    sheet.getCell(currentRowIndex, summaryStartCol + 2).values = [[totalBreakMinutes > 0 ? totalBreakMinutes.toString() + " min" : ""]];
+                    sheet.getCell(currentRowIndex, summaryStartCol + 3).values = [[Math.round(totalKits)]];
+                    sheet.getCell(currentRowIndex, summaryStartCol + 4).values = [[Number(avgWorkersFinal.toFixed(2))]];
                 }
                 
                 // Generowanie nagłówków i obramowań dla wykorzystanych przedziałów
@@ -1346,10 +1348,10 @@ async function recalculateRowSummary(ctx, sheet, rowIdx) {
     
     const netTimeHms = secondsToHms(netTimeMs / 1000);
     
-    const summaryStartCol = colMap.intervalsStart - 4;
+    const summaryStartCol = colMap.intervalsStart - 5;
     if (summaryStartCol >= 0) {
         sheet.getCell(rowIdx, summaryStartCol).values = [[safeStr(netTimeHms)]];
-        sheet.getCell(rowIdx, summaryStartCol + 3).values = [[Number(avgWorkersFinal.toFixed(2))]];
+        sheet.getCell(rowIdx, summaryStartCol + 4).values = [[Number(avgWorkersFinal.toFixed(2))]];
     }
 }
 
@@ -1687,9 +1689,9 @@ document.getElementById("btn-admin-save").onclick = async () => {
                     if (colMap.chkMat !== undefined) sheet.getCell(r, colMap.chkMat).values = [[""]];
                     if (colMap.chkBreak !== undefined) sheet.getCell(r, colMap.chkBreak).values = [[""]];
                     
-                    const summaryStartCol = colMap.intervalsStart - 4;
+                    const summaryStartCol = colMap.intervalsStart - 5;
                     if (summaryStartCol >= 0) {
-                        sheet.getRangeByIndexes(r, summaryStartCol, 1, 4).values = [["", "", "", ""]];
+                        sheet.getRangeByIndexes(r, summaryStartCol, 1, 5).values = [["", "", "", "", ""]];
                     }
                     
                     const emptyArr = Array(61).fill("");
@@ -1719,6 +1721,7 @@ document.getElementById("btn-admin-save").onclick = async () => {
         }
     }
 };
+
 
 
 
