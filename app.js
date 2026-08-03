@@ -1,4 +1,4 @@
-const ADDIN_VERSION = "1.2.2";
+const ADDIN_VERSION = "1.2.3";
 let noPassMode = false;
 
 function sheetUnprotect(sheet) {
@@ -229,7 +229,7 @@ async function initializeColumnMap(context) {
             else if (valUpper === "NOTES") { colMap.notes = c; }
             else if (valUpper === "ZMIANA MATERIAŁU?") { colMap.chkMat = c; }
             else if (valUpper === "PRZERWA?") { colMap.chkBreak = c; }
-            else if (valUpper === "AWARIA?") { colMap.chkBreakdown = c; }
+            else if (valUpper === "AWARIA?" || valUpper === "AWARIA") { colMap.chkBreakdown = c; }
             else if (valUpper === "CZAS TEORETYCZNY") { colMap.theoretical = c; }
             else if (valUpper === "START DANYCH") { dataStartColIndex = c; dataStartHeaderRow = r; }
         }
@@ -851,6 +851,21 @@ function startAutoSave() {
                         const notesVal = document.getElementById("in-running-notes").value;
                         sheet.getCell(currentRowIndex, colMap.notes).values = [[notesVal]];
                     }
+                    
+                    if (isAwariaActive) {
+                        const currentAwariaTotal = totalAwariaSecondsGlobal + awariaSecondsElapsed;
+                        sheet.getCell(currentRowIndex, colMap.awarie).values = [[safeStr(secondsToHms(currentAwariaTotal))]];
+                        if (colMap.chkBreakdown !== undefined) {
+                            sheet.getCell(currentRowIndex, colMap.chkBreakdown).values = [[safeStr(secondsToHms(currentAwariaTotal))]];
+                        }
+                    }
+                    if (isLoadingActive) {
+                        const currentLoadingTotal = totalLoadingSecondsGlobal + loadingSecondsElapsed;
+                        if (colMap.loadingTime !== undefined) {
+                            sheet.getCell(currentRowIndex, colMap.loadingTime).values = [[safeStr(secondsToHms(currentLoadingTotal))]];
+                        }
+                        sheet.getCell(currentRowIndex, currentIntervalStartCol + 6).values = [[safeStr(secondsToHms(currentIntervalLoadingSeconds + loadingSecondsElapsed))]];
+                    }
                     sheetProtect(sheet);
                     await ctx.sync();
                 });
@@ -906,6 +921,9 @@ function toggleAwaria() {
     const timerUI = document.getElementById("awaria-timer");
     
     if (isAwariaActive) {
+        if (isLoadingActive) {
+            toggleLoading(); // Zakończ ładowanie jeśli jest aktywne
+        }
         document.body.classList.add("awaria-active");
         document.body.classList.remove("timer-active"); // Usuwa zielony
         btn.innerText = "ZAKOŃCZ STAN AWARII";
@@ -933,6 +951,9 @@ function toggleAwaria() {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
             sheetUnprotect(sheet);
             sheet.getCell(currentRowIndex, colMap.awarie).values = [[safeStr(secondsToHms(totalAwariaSecondsGlobal))]];
+            if (colMap.chkBreakdown !== undefined) {
+                sheet.getCell(currentRowIndex, colMap.chkBreakdown).values = [[safeStr(secondsToHms(totalAwariaSecondsGlobal))]];
+            }
             sheetProtect(sheet);
             await ctx.sync();
         }).catch(e => console.warn(e));
@@ -940,6 +961,10 @@ function toggleAwaria() {
 }
 
 function toggleLoading() {
+    if (!isLoadingActive && isAwariaActive) {
+        alert("Zakończ najpierw stan awarii by móc rozpocząć ładowanie materiału.");
+        return;
+    }
     isLoadingActive = !isLoadingActive;
     const btn = document.getElementById("btn-loading");
     const timerUI = document.getElementById("loading-timer");
@@ -1145,6 +1170,7 @@ async function saveIncidents(fullComplete) {
                 if (colMap.avgWorkers !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.avgWorkers); c.values = [[Number(avgWorkersFinal.toFixed(2))]]; c.numberFormat = [["0.00"]]; }
                 
                 // Zapisz KOD PRZERW
+
                 if (colMap.breakCodes !== undefined) {
                     let breakCodeParts = [];
                     document.querySelectorAll(".break-chk:checked").forEach(chk => {
