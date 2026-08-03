@@ -1,4 +1,4 @@
-const ADDIN_VERSION = "1.2.4";
+const ADDIN_VERSION = "1.2.5";
 let noPassMode = false;
 
 function sheetUnprotect(sheet) {
@@ -447,7 +447,12 @@ async function fetchRowData(forcedRowIndex, isCont) {
             totalLoadingSecondsGlobal = loadedLoadingSeconds;
             
             if (colMap.chkBreak !== undefined && vals[colMap.chkBreak]) {
-                loadedBreakMinutes = parseInt(vals[colMap.chkBreak].toString()) || 0;
+                const bStr = vals[colMap.chkBreak].toString();
+                if (bStr.includes(":")) {
+                    loadedBreakMinutes = Math.floor(hmsToSeconds(bStr) / 60);
+                } else {
+                    loadedBreakMinutes = parseInt(bStr) || 0;
+                }
             } else {
                 loadedBreakMinutes = 0;
             }
@@ -1161,7 +1166,7 @@ async function saveIncidents(fullComplete) {
                 // Write summary to explicitly mapped columns
                 if (colMap.netTime !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.netTime); c.values = [[safeStr(netTimeHms)]]; c.numberFormat = [["@"]]; }
                 if (colMap.loadingTime !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.loadingTime); c.values = [[safeStr(secondsToHms(totalLoadingSecondsGlobal))]]; c.numberFormat = [["@"]]; }
-                if (colMap.breakTime !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.breakTime); c.values = [[totalBreakMinutes > 0 ? totalBreakMinutes.toString() : ""]]; c.numberFormat = [["@"]]; }
+                if (colMap.breakTime !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.breakTime); c.values = [[totalBreakMinutes > 0 ? safeStr(secondsToHms(totalBreakMinutes * 60)) : ""]]; c.numberFormat = [["@"]]; }
                 if (colMap.totalKits !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.totalKits); c.values = [[Math.round(totalKits)]]; c.numberFormat = [["0"]]; }
                 if (colMap.avgWorkers !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.avgWorkers); c.values = [[Number(avgWorkersFinal.toFixed(2))]]; c.numberFormat = [["0.00"]]; }
                 
@@ -1211,7 +1216,7 @@ async function saveIncidents(fullComplete) {
                     intervalDataRange.format.borders.weight = "Thin";
                 }
             
-            if (colMap.chkBreak !== undefined) sheet.getCell(currentRowIndex, colMap.chkBreak).values = [[totalBreakMinutes > 0 ? totalBreakMinutes.toString() : ""]];
+            if (colMap.chkBreak !== undefined) sheet.getCell(currentRowIndex, colMap.chkBreak).values = [[totalBreakMinutes > 0 ? safeStr(secondsToHms(totalBreakMinutes * 60)) : ""]];
             if (colMap.notes !== undefined) sheet.getCell(currentRowIndex, colMap.notes).values = [[incidentsText]];
             
             sheetProtect(sheet);
@@ -1436,7 +1441,12 @@ async function recalculateRowSummary(ctx, sheet, rowIdx) {
     const awariaStr = awariaCell.values[0][0] ? awariaCell.values[0][0].toString() : "00:00:00";
     const totalAwariaMs = hmsToSeconds(awariaStr) * 1000;
     
-    const totalBreakMinutes = parseInt(breakCellStr) || 0;
+    let totalBreakMinutes = 0;
+    if (breakCellStr.includes(":")) {
+        totalBreakMinutes = Math.floor(hmsToSeconds(breakCellStr) / 60);
+    } else {
+        totalBreakMinutes = parseInt(breakCellStr) || 0;
+    }
     const totalBreakMs = totalBreakMinutes * 60 * 1000;
     
     let netTimeMs = totalTimeMs - totalAwariaMs - totalBreakMs;
