@@ -1,4 +1,4 @@
-const ADDIN_VERSION = "1.1";
+const ADDIN_VERSION = "1.2";
 let noPassMode = false;
 
 function sheetUnprotect(sheet) {
@@ -1732,7 +1732,7 @@ document.getElementById("btn-admin-save").onclick = async () => {
                 sheet.getCell(adminRowIndex, colMap.awarie).values = [[awaria.toString()]];
                 if (colMap.notes !== undefined) sheet.getCell(adminRowIndex, colMap.notes).values = [[notes.toString()]];
                 
-                const emptyArr = Array(61).fill("");
+                const emptyArr = Array(71).fill("");
                 sheet.getRangeByIndexes(adminRowIndex, colMap.intervalsStart, 1, 71).values = [emptyArr];
                 
                 const wCount = parseFloat(work) || 0;
@@ -1777,7 +1777,7 @@ document.getElementById("btn-admin-save").onclick = async () => {
                     if (colMap.avgWorkers !== undefined) sheet.getCell(r, colMap.avgWorkers).values = [[""]];
                     if (colMap.breakCodes !== undefined) sheet.getCell(r, colMap.breakCodes).values = [[""]];
                     
-                    const emptyArr = Array(61).fill("");
+                    const emptyArr = Array(71).fill("");
                     sheet.getRangeByIndexes(r, colMap.intervalsStart, 1, 71).values = [emptyArr];
                 }
             }
