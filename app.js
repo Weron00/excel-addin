@@ -1,4 +1,4 @@
-const ADDIN_VERSION = "1.2.3";
+const ADDIN_VERSION = "1.2.4";
 let noPassMode = false;
 
 function sheetUnprotect(sheet) {
@@ -229,7 +229,7 @@ async function initializeColumnMap(context) {
             else if (valUpper === "NOTES") { colMap.notes = c; }
             else if (valUpper === "ZMIANA MATERIAŁU?") { colMap.chkMat = c; }
             else if (valUpper === "PRZERWA?") { colMap.chkBreak = c; }
-            else if (valUpper === "AWARIA?" || valUpper === "AWARIA") { colMap.chkBreakdown = c; }
+            else if (valUpper === "AWARIE") { colMap.userAwarie = c; }
             else if (valUpper === "CZAS TEORETYCZNY") { colMap.theoretical = c; }
             else if (valUpper === "START DANYCH") { dataStartColIndex = c; dataStartHeaderRow = r; }
         }
@@ -242,6 +242,7 @@ async function initializeColumnMap(context) {
     if (colMap.rev === undefined) missing.push("REWIZJA");
     if (colMap.product === undefined) missing.push("NAZWA PRODUKTU");
     if (colMap.nesting === undefined) missing.push("NAZWA NESTINGU");
+    if (colMap.userAwarie === undefined) missing.push("AWARIE");
     if (colMap.tol === undefined) missing.push("TOLERANCJA");
     if (colMap.expLayers === undefined) missing.push("LICZBA KITÓW/WARSTWA");
     if (colMap.maxRolls === undefined) missing.push("MAX ROLEK");
@@ -855,8 +856,8 @@ function startAutoSave() {
                     if (isAwariaActive) {
                         const currentAwariaTotal = totalAwariaSecondsGlobal + awariaSecondsElapsed;
                         sheet.getCell(currentRowIndex, colMap.awarie).values = [[safeStr(secondsToHms(currentAwariaTotal))]];
-                        if (colMap.chkBreakdown !== undefined) {
-                            sheet.getCell(currentRowIndex, colMap.chkBreakdown).values = [[safeStr(secondsToHms(currentAwariaTotal))]];
+                        if (colMap.userAwarie !== undefined) {
+                            sheet.getCell(currentRowIndex, colMap.userAwarie).values = [[safeStr(secondsToHms(currentAwariaTotal))]];
                         }
                     }
                     if (isLoadingActive) {
@@ -921,9 +922,6 @@ function toggleAwaria() {
     const timerUI = document.getElementById("awaria-timer");
     
     if (isAwariaActive) {
-        if (isLoadingActive) {
-            toggleLoading(); // Zakończ ładowanie jeśli jest aktywne
-        }
         document.body.classList.add("awaria-active");
         document.body.classList.remove("timer-active"); // Usuwa zielony
         btn.innerText = "ZAKOŃCZ STAN AWARII";
@@ -951,8 +949,8 @@ function toggleAwaria() {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
             sheetUnprotect(sheet);
             sheet.getCell(currentRowIndex, colMap.awarie).values = [[safeStr(secondsToHms(totalAwariaSecondsGlobal))]];
-            if (colMap.chkBreakdown !== undefined) {
-                sheet.getCell(currentRowIndex, colMap.chkBreakdown).values = [[safeStr(secondsToHms(totalAwariaSecondsGlobal))]];
+            if (colMap.userAwarie !== undefined) {
+                sheet.getCell(currentRowIndex, colMap.userAwarie).values = [[safeStr(secondsToHms(totalAwariaSecondsGlobal))]];
             }
             sheetProtect(sheet);
             await ctx.sync();
@@ -961,10 +959,6 @@ function toggleAwaria() {
 }
 
 function toggleLoading() {
-    if (!isLoadingActive && isAwariaActive) {
-        alert("Zakończ najpierw stan awarii by móc rozpocząć ładowanie materiału.");
-        return;
-    }
     isLoadingActive = !isLoadingActive;
     const btn = document.getElementById("btn-loading");
     const timerUI = document.getElementById("loading-timer");
@@ -978,8 +972,10 @@ function toggleLoading() {
         timerUI.innerText = secondsToHms(0);
         
         loadingTimerInterval = setInterval(() => {
-            loadingSecondsElapsed++;
-            timerUI.innerText = secondsToHms(loadingSecondsElapsed);
+            if (!isAwariaActive) {
+                loadingSecondsElapsed++;
+                timerUI.innerText = secondsToHms(loadingSecondsElapsed);
+            }
         }, 1000);
     } else {
         document.body.classList.remove("loading-active");
