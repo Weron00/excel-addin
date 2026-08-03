@@ -1,4 +1,4 @@
-const ADDIN_VERSION = "1.0";
+const ADDIN_VERSION = "1.1";
 let noPassMode = false;
 
 function sheetUnprotect(sheet) {
@@ -256,7 +256,8 @@ async function initializeColumnMap(context) {
     colMap.breakTime = dataStartColIndex + 5;
     colMap.totalKits = dataStartColIndex + 6;
     colMap.avgWorkers = dataStartColIndex + 7;
-    colMap.intervalsStart = dataStartColIndex + 8;
+    colMap.breakCodes = dataStartColIndex + 8;
+    colMap.intervalsStart = dataStartColIndex + 9;
 
     // Sprawdź i utwórz nagłówki jeśli brakuje
     const headerRow = Math.max(itemRow, startDayRow, dataStartHeaderRow);
@@ -268,7 +269,8 @@ async function initializeColumnMap(context) {
         { offset: 5, name: "SUMARYCZNY CZAS PRZERW" },
         { offset: 6, name: "SUMA KITÓW" },
         { offset: 7, name: "ŚREDNIA PRACOWNIKÓW" },
-        { offset: 8, name: "START PRZEDZIAŁÓW" }
+        { offset: 8, name: "KOD PRZERW" },
+        { offset: 9, name: "START PRZEDZIAŁÓW" }
     ];
 
     let needsHeaders = false;
@@ -454,6 +456,23 @@ async function fetchRowData(forcedRowIndex, isCont) {
                 loadedBreakMinutes = 0;
             }
             document.querySelectorAll(".break-chk").forEach(chk => chk.checked = false);
+
+            // Odczytaj KOD PRZERW i zaznacz odpowiednie checkboxy
+            if (colMap.breakCodes !== undefined && vals[colMap.breakCodes]) {
+                const codesStr = vals[colMap.breakCodes].toString().trim();
+                if (codesStr) {
+                    const codes = codesStr.split(",").map(s => s.trim().toUpperCase());
+                    codes.forEach(code => {
+                        const match = code.match(/^Z(\d+)P(\d+)$/);
+                        if (match) {
+                            const chkId = `chk-b${match[1]}-${match[2]}`;
+                            const chk = document.getElementById(chkId);
+                            if (chk) chk.checked = true;
+                        }
+                    });
+                    loadedBreakMinutes = 0; // Przerwy są śledzone przez checkboxy
+                }
+            }
 
             const existingNotes = vals[colMap.notes] ? vals[colMap.notes].toString() : "";
             document.getElementById("in-other-incidents").value = existingNotes;
@@ -1130,6 +1149,18 @@ async function saveIncidents(fullComplete) {
                 if (colMap.totalKits !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.totalKits); c.values = [[Math.round(totalKits)]]; c.numberFormat = [["0"]]; }
                 if (colMap.avgWorkers !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.avgWorkers); c.values = [[Number(avgWorkersFinal.toFixed(2))]]; c.numberFormat = [["0.00"]]; }
                 
+                // Zapisz KOD PRZERW
+                if (colMap.breakCodes !== undefined) {
+                    let breakCodeParts = [];
+                    document.querySelectorAll(".break-chk:checked").forEach(chk => {
+                        const parts = chk.id.replace("chk-b", "").split("-");
+                        if (parts.length === 2) {
+                            breakCodeParts.push(`Z${parts[0]}P${parts[1]}`);
+                        }
+                    });
+                    sheet.getCell(currentRowIndex, colMap.breakCodes).values = [[breakCodeParts.join(", ")]];
+                }
+                
                 // Generowanie nagłówków i obramowań dla wykorzystanych przedziałów
                 if (colMap.intervalsStart !== undefined && currentIntervalIndex >= 0) {
                     const usedColsCount = (currentIntervalIndex + 1) * 7;
@@ -1744,6 +1775,7 @@ document.getElementById("btn-admin-save").onclick = async () => {
                     if (colMap.breakTime !== undefined) sheet.getCell(r, colMap.breakTime).values = [[""]];
                     if (colMap.totalKits !== undefined) sheet.getCell(r, colMap.totalKits).values = [[""]];
                     if (colMap.avgWorkers !== undefined) sheet.getCell(r, colMap.avgWorkers).values = [[""]];
+                    if (colMap.breakCodes !== undefined) sheet.getCell(r, colMap.breakCodes).values = [[""]];
                     
                     const emptyArr = Array(61).fill("");
                     sheet.getRangeByIndexes(r, colMap.intervalsStart, 1, 71).values = [emptyArr];
