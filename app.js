@@ -1,4 +1,15 @@
+const ADDIN_VERSION = "1.0";
+let noPassMode = false;
+
+function sheetUnprotect(sheet) {
+    if (!noPassMode) sheet.protection.unprotect("ShortP26");
+}
+function sheetProtect(sheet) {
+    if (!noPassMode) sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
+}
+
 Office.onReady((info) => {
+    document.getElementById("version-footer").innerText = "Wersja: " + ADDIN_VERSION;
     document.getElementById("btn-fetch").onclick = () => fetchRowData(null, false);
     document.getElementById("btn-cancel-data").onclick = resetUI;
     document.getElementById("btn-to-machine").onclick = handleToMachineClick;
@@ -192,6 +203,8 @@ async function initializeColumnMap(context) {
     colMap = {};
     let itemRow = -1;
     let startDayRow = -1;
+    let dataStartColIndex = -1;
+    let dataStartHeaderRow = -1;
 
     for (let r = 0; r < 10; r++) {
         const row = range.values[r];
@@ -217,13 +230,75 @@ async function initializeColumnMap(context) {
             else if (valUpper === "ZMIANA MATERIAŁU?") { colMap.chkMat = c; }
             else if (valUpper === "PRZERWA?") { colMap.chkBreak = c; }
             else if (valUpper === "AWARIA?") { colMap.chkBreakdown = c; }
-            else if (valUpper === "MASZYNA") { colMap.machine = c; }
-            else if (valUpper === "AWARIE") { colMap.awarie = c; }
-            else if (valUpper === "START PRZEDZIAŁÓW") { colMap.intervalsStart = c; }
             else if (valUpper === "CZAS TEORETYCZNY") { colMap.theoretical = c; }
+            else if (valUpper === "START DANYCH") { dataStartColIndex = c; dataStartHeaderRow = r; }
         }
     }
 
+    // Sprawdź czy kolumna START DANYCH istnieje
+    if (dataStartColIndex === -1) {
+        document.getElementById("btn-fetch").style.display = "none";
+        document.getElementById("unfinished-list").innerHTML = `<div style="color:#dc2626; font-size:13px; padding:10px; border:1px solid #fca5a5; background:#fef2f2; border-radius:6px; line-height:1.4;"><b>BŁĄD STRUKTURY ARKUSZA:</b><br>Brak kolumny <b>START DANYCH</b> w pierwszych 10 wierszach.<br><br>Dodaj nagłówek "START DANYCH" w dowolnej kolumnie.</div>`;
+        document.getElementById("unfinished-container").style.display = "block";
+        throw new Error("Brak kolumny START DANYCH w pierwszych 10 wierszach.");
+    }
+
+    // Odczytaj tryb NoPass z wiersza 1 (indeks 0) kolumny START DANYCH
+    const noPassCellVal = range.values[0] && range.values[0][dataStartColIndex] 
+        ? range.values[0][dataStartColIndex].toString().trim().toUpperCase() : "";
+    noPassMode = (noPassCellVal === "NOPASS");
+
+    // Mapuj kolumny ze stałych offsetów od START DANYCH
+    colMap.machine = dataStartColIndex + 1;
+    colMap.awarie = dataStartColIndex + 2;
+    colMap.netTime = dataStartColIndex + 3;
+    colMap.loadingTime = dataStartColIndex + 4;
+    colMap.breakTime = dataStartColIndex + 5;
+    colMap.totalKits = dataStartColIndex + 6;
+    colMap.avgWorkers = dataStartColIndex + 7;
+    colMap.intervalsStart = dataStartColIndex + 8;
+
+    // Sprawdź i utwórz nagłówki jeśli brakuje
+    const headerRow = Math.max(itemRow, startDayRow, dataStartHeaderRow);
+    const expectedHeaders = [
+        { offset: 1, name: "MASZYNA" },
+        { offset: 2, name: "AWARIE" },
+        { offset: 3, name: "CZAS NETTO" },
+        { offset: 4, name: "SUMARYCZNY CZAS ŁADOWANIA" },
+        { offset: 5, name: "SUMARYCZNY CZAS PRZERW" },
+        { offset: 6, name: "SUMA KITÓW" },
+        { offset: 7, name: "ŚREDNIA PRACOWNIKÓW" },
+        { offset: 8, name: "START PRZEDZIAŁÓW" }
+    ];
+
+    let needsHeaders = false;
+    for (const h of expectedHeaders) {
+        const colIdx = dataStartColIndex + h.offset;
+        const cellVal = range.values[headerRow] && range.values[headerRow][colIdx] 
+            ? range.values[headerRow][colIdx].toString().trim().toUpperCase() : "";
+        if (cellVal !== h.name.toUpperCase()) {
+            needsHeaders = true;
+            break;
+        }
+    }
+
+    if (needsHeaders) {
+        sheetUnprotect(sheet);
+        for (const h of expectedHeaders) {
+            sheet.getCell(headerRow, dataStartColIndex + h.offset).values = [[h.name]];
+        }
+        // Dodaj komentarz/notatkę do CZAS NETTO
+        try {
+            const netTimeCell = sheet.getCell(headerRow, colMap.netTime);
+            context.workbook.comments.add(netTimeCell, "Czas z sumy przedziałów - awarie - przerwy + ładowanie materiału");
+        } catch (e) {
+            console.warn("Nie udało się dodać komentarza do CZAS NETTO:", e);
+        }
+        sheetProtect(sheet);
+        await context.sync();
+    }
+
+    // Walidacja pozostałych wymaganych kolumn (bez auto-generowanych)
     const missing = [];
     if (colMap.item === undefined) missing.push("ITEM PRODUKTU");
     if (colMap.rev === undefined) missing.push("REWIZJA");
@@ -236,8 +311,6 @@ async function initializeColumnMap(context) {
     if (colMap.workers === undefined) missing.push("ILOŚĆ PRACOWNIKÓW");
     if (colMap.startGlobal === undefined) missing.push("Start (Day...");
     if (colMap.endGlobal === undefined) missing.push("End (Day...");
-    if (colMap.awarie === undefined) missing.push("AWARIE");
-    if (colMap.intervalsStart === undefined) missing.push("START PRZEDZIAŁÓW");
 
     if (missing.length > 0) {
         document.getElementById("btn-fetch").style.display = "none";
@@ -248,7 +321,7 @@ async function initializeColumnMap(context) {
         document.getElementById("btn-fetch").style.display = "inline-block";
     }
     
-    dataStartRowIndex = Math.max(itemRow, startDayRow) + 1;
+    dataStartRowIndex = headerRow + 1;
 }
 
 async function scanForUnfinished(context) {
@@ -488,9 +561,9 @@ document.getElementById("btn-unexp-finished").onclick = async () => {
     try {
         await Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
-            sheet.protection.unprotect("ShortP26");
+            sheetUnprotect(sheet);
             sheet.getCell(currentRowIndex, colMap.intervalsStart).values = [["ZAMKNIĘTO"]];
-            sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
+            sheetProtect(sheet);
             await ctx.sync();
         });
         document.getElementById("unexpected-card").classList.add("hidden");
@@ -588,7 +661,7 @@ async function writeStartTime() {
         setStatus("Rozpoczynanie...");
         await Excel.run(async (context) => {
             const sheet = context.workbook.worksheets.getItem(activeSheetName);
-            sheet.protection.unprotect("ShortP26");
+            sheetUnprotect(sheet);
             const dateNum = getExcelDateNumber();
             
             // Global Strings Updates
@@ -672,7 +745,7 @@ async function writeStartTime() {
             }
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 2).values = [[currentWorkersCount]];
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 3).values = [[realRolls]];
-            sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
+            sheetProtect(sheet);
             await context.sync();
             
             const iTxt = document.getElementById("val-item").innerText;
@@ -755,7 +828,7 @@ function startAutoSave() {
             try {
                 await Excel.run(async (ctx) => {
                     const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
-                    sheet.protection.unprotect("ShortP26");
+                    sheetUnprotect(sheet);
                     const autoSaveCell = sheet.getCell(currentRowIndex, currentIntervalStartCol + 5);
                     autoSaveCell.values = [[getExcelDateNumber()]];
                     autoSaveCell.numberFormat = [["yyyy-mm-dd hh:mm"]];
@@ -764,7 +837,7 @@ function startAutoSave() {
                         const notesVal = document.getElementById("in-running-notes").value;
                         sheet.getCell(currentRowIndex, colMap.notes).values = [[notesVal]];
                     }
-                    sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
+                    sheetProtect(sheet);
                     await ctx.sync();
                 });
             } catch (e) {
@@ -805,10 +878,10 @@ function adjustWorkers(amount) {
     // Auto update excel values (End workers + Global string)
     Excel.run(async (ctx) => {
         const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
-        sheet.protection.unprotect("ShortP26");
+        sheetUnprotect(sheet);
         sheet.getCell(currentRowIndex, colMap.workers).values = [[safeStr(currentWorkerGlobalString)]];
         sheet.getCell(currentRowIndex, currentIntervalStartCol + 2).values = [[currentWorkersCount]];
-        sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
+        sheetProtect(sheet);
         await ctx.sync();
     }).catch(e => console.warn(e));
 }
@@ -844,9 +917,9 @@ function toggleAwaria() {
         // Zapisz sumę awarii do excela
         Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
-            sheet.protection.unprotect("ShortP26");
+            sheetUnprotect(sheet);
             sheet.getCell(currentRowIndex, colMap.awarie).values = [[safeStr(secondsToHms(totalAwariaSecondsGlobal))]];
-            sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
+            sheetProtect(sheet);
             await ctx.sync();
         }).catch(e => console.warn(e));
     }
@@ -881,12 +954,12 @@ function toggleLoading() {
         
         Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
-            sheet.protection.unprotect("ShortP26");
+            sheetUnprotect(sheet);
             
             if (currentIntervalStartCol !== -1) {
                 sheet.getCell(currentRowIndex, currentIntervalStartCol + 6).values = [[safeStr(secondsToHms(currentIntervalLoadingSeconds))]];
             }
-            sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
+            sheetProtect(sheet);
             await ctx.sync();
         }).catch(e => console.warn(e));
     }
@@ -905,7 +978,7 @@ async function confirmChangeRolls() {
         setStatus("Zmiana rolek - zapis...");
         await Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
-            sheet.protection.unprotect("ShortP26");
+            sheetUnprotect(sheet);
             const dateNum = getExcelDateNumber();
             
             // Koniec starego
@@ -928,7 +1001,7 @@ async function confirmChangeRolls() {
             const newStart = sheet.getCell(currentRowIndex, currentIntervalStartCol + 4);
             newStart.values = [[dateNum]];
             newStart.numberFormat = [["yyyy-mm-dd hh:mm"]];
-            sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
+            sheetProtect(sheet);
             await ctx.sync();
             
             document.getElementById("in-real-rolls").value = newRolls;
@@ -986,7 +1059,7 @@ async function saveIncidents(fullComplete) {
         setStatus("Zapisywanie...");
         await Excel.run(async (context) => {
             const sheet = context.workbook.worksheets.getItem(activeSheetName);
-            sheet.protection.unprotect("ShortP26");
+            sheetUnprotect(sheet);
             const dateNum = getExcelDateNumber();
             
             if (currentIntervalStartCol !== -1) {
@@ -1093,7 +1166,7 @@ async function saveIncidents(fullComplete) {
             if (colMap.chkBreak !== undefined) sheet.getCell(currentRowIndex, colMap.chkBreak).values = [[totalBreakMinutes > 0 ? totalBreakMinutes.toString() : ""]];
             if (colMap.notes !== undefined) sheet.getCell(currentRowIndex, colMap.notes).values = [[incidentsText]];
             
-            sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
+            sheetProtect(sheet);
             await context.sync();
             
             resetUI();
@@ -1554,7 +1627,7 @@ document.getElementById("btn-admin-save").onclick = async () => {
                 }
             }
             
-            sheet.protection.unprotect("ShortP26");
+            sheetUnprotect(sheet);
             
             if (currentAdminAction === "START") {
                 const excelNum = getExcelDateNumber(newD_start);
@@ -1677,7 +1750,7 @@ document.getElementById("btn-admin-save").onclick = async () => {
                 }
             }
             
-            sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
+            sheetProtect(sheet);
             await ctx.sync();
         });
         
