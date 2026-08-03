@@ -1,4 +1,4 @@
-const ADDIN_VERSION = "1.2";
+const ADDIN_VERSION = "1.2.1";
 let noPassMode = false;
 
 function sheetUnprotect(sheet) {
@@ -235,12 +235,28 @@ async function initializeColumnMap(context) {
         }
     }
 
-    // Sprawdź czy kolumna START DANYCH istnieje
-    if (dataStartColIndex === -1) {
+    // Zbieramy braki
+    const missing = [];
+    if (dataStartColIndex === -1) missing.push("START DANYCH");
+    if (colMap.item === undefined) missing.push("ITEM PRODUKTU");
+    if (colMap.rev === undefined) missing.push("REWIZJA");
+    if (colMap.product === undefined) missing.push("NAZWA PRODUKTU");
+    if (colMap.nesting === undefined) missing.push("NAZWA NESTINGU");
+    if (colMap.tol === undefined) missing.push("TOLERANCJA");
+    if (colMap.expLayers === undefined) missing.push("LICZBA KITÓW/WARSTWA");
+    if (colMap.maxRolls === undefined) missing.push("MAX ROLEK");
+    if (colMap.operator === undefined) missing.push("OPERATOR");
+    if (colMap.workers === undefined) missing.push("ILOŚĆ PRACOWNIKÓW");
+    if (colMap.startGlobal === undefined) missing.push("Start (Day...");
+    if (colMap.endGlobal === undefined) missing.push("End (Day...");
+
+    if (missing.length > 0) {
         document.getElementById("btn-fetch").style.display = "none";
-        document.getElementById("unfinished-list").innerHTML = `<div style="color:#dc2626; font-size:13px; padding:10px; border:1px solid #fca5a5; background:#fef2f2; border-radius:6px; line-height:1.4;"><b>BŁĄD STRUKTURY ARKUSZA:</b><br>Brak kolumny <b>START DANYCH</b> w pierwszych 10 wierszach.<br><br>Dodaj nagłówek "START DANYCH" w dowolnej kolumnie.</div>`;
+        document.getElementById("unfinished-list").innerHTML = `<div style="color:#dc2626; font-size:13px; padding:10px; border:1px solid #fca5a5; background:#fef2f2; border-radius:6px; line-height:1.4;"><b>BŁĄD STRUKTURY ARKUSZA:</b><br>Brakuje następujących kolumn w pierwszych 10 wierszach:<br><br><b>${missing.join(", ")}</b></div>`;
         document.getElementById("unfinished-container").style.display = "block";
-        throw new Error("Brak kolumny START DANYCH w pierwszych 10 wierszach.");
+        throw new Error("Brakuje kolumn: " + missing.join(", "));
+    } else {
+        document.getElementById("btn-fetch").style.display = "inline-block";
     }
 
     // Odczytaj tryb NoPass z wiersza 1 (indeks 0) kolumny START DANYCH
@@ -300,28 +316,7 @@ async function initializeColumnMap(context) {
         await context.sync();
     }
 
-    // Walidacja pozostałych wymaganych kolumn (bez auto-generowanych)
-    const missing = [];
-    if (colMap.item === undefined) missing.push("ITEM PRODUKTU");
-    if (colMap.rev === undefined) missing.push("REWIZJA");
-    if (colMap.product === undefined) missing.push("NAZWA PRODUKTU");
-    if (colMap.nesting === undefined) missing.push("NAZWA NESTINGU");
-    if (colMap.tol === undefined) missing.push("TOLERANCJA");
-    if (colMap.expLayers === undefined) missing.push("LICZBA KITÓW/WARSTWA");
-    if (colMap.maxRolls === undefined) missing.push("MAX ROLEK");
-    if (colMap.operator === undefined) missing.push("OPERATOR");
-    if (colMap.workers === undefined) missing.push("ILOŚĆ PRACOWNIKÓW");
-    if (colMap.startGlobal === undefined) missing.push("Start (Day...");
-    if (colMap.endGlobal === undefined) missing.push("End (Day...");
 
-    if (missing.length > 0) {
-        document.getElementById("btn-fetch").style.display = "none";
-        document.getElementById("unfinished-list").innerHTML = `<div style="color:#dc2626; font-size:13px; padding:10px; border:1px solid #fca5a5; background:#fef2f2; border-radius:6px; line-height:1.4;"><b>BŁĄD STRUKTURY ARKUSZA:</b><br>Brakuje następujących kolumn w pierwszych 10 wierszach:<br><br><b>${missing.join(", ")}</b></div>`;
-        document.getElementById("unfinished-container").style.display = "block";
-        throw new Error("Brakuje kolumn w pierwszych 10 wierszach: " + missing.join(", "));
-    } else {
-        document.getElementById("btn-fetch").style.display = "inline-block";
-    }
     
     dataStartRowIndex = headerRow + 1;
 }
