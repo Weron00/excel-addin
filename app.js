@@ -1,4 +1,4 @@
-const ADDIN_VERSION = "1.2.1";
+const ADDIN_VERSION = "1.2.2";
 let noPassMode = false;
 
 function sheetUnprotect(sheet) {
@@ -279,7 +279,7 @@ async function initializeColumnMap(context) {
     const headerRow = Math.max(itemRow, startDayRow, dataStartHeaderRow);
     const expectedHeaders = [
         { offset: 1, name: "MASZYNA" },
-        { offset: 2, name: "AWARIE" },
+        { offset: 2, name: "AWARIE DANE" },
         { offset: 3, name: "CZAS NETTO" },
         { offset: 4, name: "SUMARYCZNY CZAS ŁADOWANIA" },
         { offset: 5, name: "SUMARYCZNY CZAS PRZERW" },
