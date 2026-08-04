@@ -1,8 +1,8 @@
-const ADDIN_VERSION = "1.2.5";
+const ADDIN_VERSION = "1.2.6";
 let noPassMode = false;
 
 function sheetUnprotect(sheet) {
-    if (!noPassMode) sheet.protection.unprotect("ShortP26");
+    sheet.protection.unprotect("ShortP26");
 }
 function sheetProtect(sheet) {
     if (!noPassMode) sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
@@ -261,8 +261,12 @@ async function initializeColumnMap(context) {
     }
 
     // Odczytaj tryb NoPass z wiersza 1 (indeks 0) kolumny START DANYCH
-    const noPassCellVal = range.values[0] && range.values[0][dataStartColIndex] 
-        ? range.values[0][dataStartColIndex].toString().trim().toUpperCase() : "";
+    let noPassCellVal = "";
+    if (dataStartColIndex !== -1) {
+        const noPassRange = sheet.getRangeByIndexes(0, dataStartColIndex, 1, 1).load("values");
+        await context.sync();
+        noPassCellVal = noPassRange.values[0][0] ? noPassRange.values[0][0].toString().trim().toUpperCase() : "";
+    }
     noPassMode = (noPassCellVal === "NOPASS");
 
     // Mapuj kolumny ze stałych offsetów od START DANYCH
