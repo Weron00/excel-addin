@@ -1,4 +1,4 @@
-const ADDIN_VERSION = "1.2.6";
+const ADDIN_VERSION = "1.2.7";
 let noPassMode = false;
 
 function sheetUnprotect(sheet) {
@@ -796,8 +796,17 @@ async function writeStartTime() {
 function startTimer() {
     if (!resumeUnexpected) secondsElapsed = 0;
     updateTimerDisplay();
+    let lastTick = Date.now();
+    let accumulatedMs = secondsElapsed * 1000;
+    
     timerInterval = setInterval(() => {
-        secondsElapsed++;
+        const now = Date.now();
+        const delta = now - lastTick;
+        lastTick = now;
+        
+        accumulatedMs += delta;
+        secondsElapsed = Math.floor(accumulatedMs / 1000);
+        
         updateTimerDisplay();
     }, 1000);
 }
@@ -939,8 +948,17 @@ function toggleAwaria() {
         awariaSecondsElapsed = 0;
         timerUI.innerText = secondsToHms(0);
         updateTimerDisplay(); // aktualizacja by zamrozić netto
+        let lastTick = Date.now();
+        let accumulatedMs = 0;
+        
         awariaTimerInterval = setInterval(() => {
-            awariaSecondsElapsed++;
+            const now = Date.now();
+            const delta = now - lastTick;
+            lastTick = now;
+            
+            accumulatedMs += delta;
+            awariaSecondsElapsed = Math.floor(accumulatedMs / 1000);
+            
             timerUI.innerText = secondsToHms(awariaSecondsElapsed);
             updateTimerDisplay(); // aktualizacja by zamrozić netto w trakcie awarii
         }, 1000);
@@ -980,9 +998,17 @@ function toggleLoading() {
         loadingSecondsElapsed = 0;
         timerUI.innerText = secondsToHms(0);
         
+        let lastTick = Date.now();
+        let accumulatedMs = 0;
+        
         loadingTimerInterval = setInterval(() => {
+            const now = Date.now();
+            const delta = now - lastTick;
+            lastTick = now;
+            
             if (!isAwariaActive) {
-                loadingSecondsElapsed++;
+                accumulatedMs += delta;
+                loadingSecondsElapsed = Math.floor(accumulatedMs / 1000);
                 timerUI.innerText = secondsToHms(loadingSecondsElapsed);
             }
         }, 1000);
