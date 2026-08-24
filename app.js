@@ -278,7 +278,7 @@ async function initializeColumnMap(context) {
                 if (valUpper === "ITEM") { colMap.item = c; itemRow = r; }
                 else if (valUpper === "REV") { colMap.rev = c; }
                 else if (valUpper === "NAZWA") { colMap.product = c; }
-                else if (valUpper === "CZĘŚCI / ELEMENTY") { colMap.nesting = c; }
+                else if (valUpper === "PROGRAM") { colMap.nesting = c; }
                 else if (valUpper === "UN") { colMap.expLayers = c; }
                 else if (valUpper === "START") { colMap.startGlobal = c; startDayRow = r; }
                 else if (valUpper === "KONIEC") { colMap.endGlobal = c; }
@@ -315,7 +315,7 @@ async function initializeColumnMap(context) {
         if (colMap.item === undefined) missing.push("ITEM");
         if (colMap.rev === undefined) missing.push("REV");
         if (colMap.product === undefined) missing.push("NAZWA");
-        if (colMap.nesting === undefined) missing.push("CZĘŚCI / ELEMENTY");
+        if (colMap.nesting === undefined) missing.push("PROGRAM");
         if (colMap.expLayers === undefined) missing.push("UN");
         if (colMap.startGlobal === undefined) missing.push("START");
         if (colMap.endGlobal === undefined) missing.push("KONIEC");
@@ -476,7 +476,9 @@ function updateElementsVisibilityAndLabels() {
         if (lblItem) lblItem.innerText = "ITEM";
         if (lblRev) lblRev.innerText = "REV";
         if (lblProduct) lblProduct.innerText = "NAZWA";
-        if (lblNesting) lblNesting.innerText = "CZĘŚCI / ELEMENTY";
+        if (lblNesting) {
+            lblNesting.innerText = (currentMode === "CCS_S") ? "PROGRAM" : "CZĘŚCI / ELEMENTY";
+        }
     }
 }
 
