@@ -224,14 +224,18 @@ async function initializeColumnMap(context) {
 
     // Określamy tryb na podstawie komórki nad START DANYCH
     let detectedMode = "DEFAULT";
+    let isNoPassFromModeCell = false;
     if (dataStartColIndex !== -1 && dataStartHeaderRow > 0) {
         const aboveVal = range.values[dataStartHeaderRow - 1][dataStartColIndex] 
             ? range.values[dataStartHeaderRow - 1][dataStartColIndex].toString().trim().toUpperCase() 
             : "";
-        if (aboveVal === "VIS") {
-            detectedMode = "VIS";
-        } else if (aboveVal === "CCS_S") {
+        if (aboveVal.includes("CCS_S")) {
             detectedMode = "CCS_S";
+        } else if (aboveVal.includes("VIS")) {
+            detectedMode = "VIS";
+        }
+        if (aboveVal.includes("NOPASS")) {
+            isNoPassFromModeCell = true;
         }
     }
     currentMode = detectedMode;
@@ -344,7 +348,7 @@ async function initializeColumnMap(context) {
         await context.sync();
         noPassCellVal = noPassRange.values[0][0] ? noPassRange.values[0][0].toString().trim().toUpperCase() : "";
     }
-    noPassMode = (noPassCellVal === "NOPASS");
+    noPassMode = (noPassCellVal === "NOPASS") || isNoPassFromModeCell;
 
     // Mapuj kolumny ze stałych offsetów od START DANYCH
     colMap.machine = dataStartColIndex + 1;
@@ -403,6 +407,11 @@ async function initializeColumnMap(context) {
     // Zaktualizuj UI (Badge, etykiety oraz ukryj niepotrzebne kontrolki)
     updateModeUI();
     updateElementsVisibilityAndLabels();
+
+    if (noPassMode) {
+        sheetUnprotect(sheet);
+        await context.sync();
+    }
 }
 
 function updateModeUI() {
