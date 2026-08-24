@@ -1,5 +1,6 @@
-const ADDIN_VERSION = "1.2.7";
+const ADDIN_VERSION = "1.3";
 let noPassMode = false;
+let currentMode = "DEFAULT";
 
 function sheetUnprotect(sheet) {
     sheet.protection.unprotect("ShortP26");
@@ -206,6 +207,36 @@ async function initializeColumnMap(context) {
     let dataStartColIndex = -1;
     let dataStartHeaderRow = -1;
 
+    // KROK 1: Najpierw znajdź START DANYCH i określ tryb
+    for (let r = 0; r < 10; r++) {
+        const row = range.values[r];
+        if (!row) continue;
+        for (let c = 0; c < row.length; c++) {
+            const val = row[c] ? row[c].toString().trim() : "";
+            if (val.toUpperCase() === "START DANYCH") {
+                dataStartColIndex = c;
+                dataStartHeaderRow = r;
+                break;
+            }
+        }
+        if (dataStartColIndex !== -1) break;
+    }
+
+    // Określamy tryb na podstawie komórki nad START DANYCH
+    let detectedMode = "DEFAULT";
+    if (dataStartColIndex !== -1 && dataStartHeaderRow > 0) {
+        const aboveVal = range.values[dataStartHeaderRow - 1][dataStartColIndex] 
+            ? range.values[dataStartHeaderRow - 1][dataStartColIndex].toString().trim().toUpperCase() 
+            : "";
+        if (aboveVal === "VIS") {
+            detectedMode = "VIS";
+        } else if (aboveVal === "CCS_S") {
+            detectedMode = "CCS_S";
+        }
+    }
+    currentMode = detectedMode;
+
+    // KROK 2: Mapuj kolumny w oparciu o wykryty tryb
     for (let r = 0; r < 10; r++) {
         const row = range.values[r];
         if (!row) continue;
@@ -215,41 +246,87 @@ async function initializeColumnMap(context) {
 
             const valUpper = val.toUpperCase();
 
-            if (valUpper === "ITEM PRODUKTU") { colMap.item = c; itemRow = r; }
-            else if (valUpper === "REWIZJA") { colMap.rev = c; }
-            else if (valUpper === "NAZWA PRODUKTU") { colMap.product = c; }
-            else if (valUpper === "NAZWA NESTINGU") { colMap.nesting = c; }
-            else if (valUpper === "TOLERANCJA") { colMap.tol = c; }
-            else if (valUpper === "LICZBA KITÓW/WARSTWA") { colMap.expLayers = c; }
-            else if (valUpper === "MAX ROLEK") { colMap.maxRolls = c; }
-            else if (valUpper === "OPERATOR") { colMap.operator = c; }
+            // Wspólne kolumny dla wszystkich trybów
+            if (valUpper === "OPERATOR") { colMap.operator = c; }
             else if (valUpper === "ILOŚĆ PRACOWNIKÓW") { colMap.workers = c; }
-            else if (valUpper.includes("START (DAY")) { colMap.startGlobal = c; startDayRow = r; }
-            else if (valUpper.includes("END (DAY")) { colMap.endGlobal = c; }
             else if (valUpper === "NOTES") { colMap.notes = c; }
             else if (valUpper === "ZMIANA MATERIAŁU?") { colMap.chkMat = c; }
             else if (valUpper === "PRZERWA?") { colMap.chkBreak = c; }
             else if (valUpper === "AWARIE") { colMap.userAwarie = c; }
             else if (valUpper === "CZAS TEORETYCZNY") { colMap.theoretical = c; }
-            else if (valUpper === "START DANYCH") { dataStartColIndex = c; dataStartHeaderRow = r; }
+
+            // Kolumny zależne od trybu
+            if (currentMode === "DEFAULT") {
+                if (valUpper === "ITEM PRODUKTU") { colMap.item = c; itemRow = r; }
+                else if (valUpper === "REWIZJA") { colMap.rev = c; }
+                else if (valUpper === "NAZWA PRODUKTU") { colMap.product = c; }
+                else if (valUpper === "NAZWA NESTINGU") { colMap.nesting = c; }
+                else if (valUpper === "TOLERANCJA") { colMap.tol = c; }
+                else if (valUpper === "LICZBA KITÓW/WARSTWA") { colMap.expLayers = c; }
+                else if (valUpper === "MAX ROLEK") { colMap.maxRolls = c; }
+                else if (valUpper.includes("START (DAY")) { colMap.startGlobal = c; startDayRow = r; }
+                else if (valUpper.includes("END (DAY")) { colMap.endGlobal = c; }
+            } else if (currentMode === "VIS") {
+                if (valUpper === "ITEM") { colMap.item = c; itemRow = r; }
+                else if (valUpper === "REV") { colMap.rev = c; }
+                else if (valUpper === "NAZWA") { colMap.product = c; }
+                else if (valUpper === "CZĘŚCI / ELEMENTY") { colMap.nesting = c; }
+                else if (valUpper === "UN") { colMap.expLayers = c; }
+                else if (valUpper === "START") { colMap.startGlobal = c; startDayRow = r; }
+                else if (valUpper === "KONIEC") { colMap.endGlobal = c; }
+            } else if (currentMode === "CCS_S") {
+                if (valUpper === "ITEM") { colMap.item = c; itemRow = r; }
+                else if (valUpper === "REV") { colMap.rev = c; }
+                else if (valUpper === "NAZWA") { colMap.product = c; }
+                else if (valUpper === "CZĘŚCI / ELEMENTY") { colMap.nesting = c; }
+                else if (valUpper === "UN") { colMap.expLayers = c; }
+                else if (valUpper === "START") { colMap.startGlobal = c; startDayRow = r; }
+                else if (valUpper === "KONIEC") { colMap.endGlobal = c; }
+                else if (valUpper === "TOLERANCJA") { colMap.tol = c; }
+                else if (valUpper === "BIAX") { colMap.tol_biax = c; }
+                else if (valUpper === "UNDIR") { colMap.tol_undir = c; }
+            }
         }
     }
 
     // Zbieramy braki
     const missing = [];
     if (dataStartColIndex === -1) missing.push("START DANYCH");
-    if (colMap.item === undefined) missing.push("ITEM PRODUKTU");
-    if (colMap.rev === undefined) missing.push("REWIZJA");
-    if (colMap.product === undefined) missing.push("NAZWA PRODUKTU");
-    if (colMap.nesting === undefined) missing.push("NAZWA NESTINGU");
+    
+    if (currentMode === "DEFAULT") {
+        if (colMap.item === undefined) missing.push("ITEM PRODUKTU");
+        if (colMap.rev === undefined) missing.push("REWIZJA");
+        if (colMap.product === undefined) missing.push("NAZWA PRODUKTU");
+        if (colMap.nesting === undefined) missing.push("NAZWA NESTINGU");
+        if (colMap.tol === undefined) missing.push("TOLERANCJA");
+        if (colMap.expLayers === undefined) missing.push("LICZBA KITÓW/WARSTWA");
+        if (colMap.maxRolls === undefined) missing.push("MAX ROLEK");
+        if (colMap.startGlobal === undefined) missing.push("Start (Day+Hour)");
+        if (colMap.endGlobal === undefined) missing.push("End (Day+Hour)");
+    } else if (currentMode === "VIS") {
+        if (colMap.item === undefined) missing.push("ITEM");
+        if (colMap.rev === undefined) missing.push("REV");
+        if (colMap.product === undefined) missing.push("NAZWA");
+        if (colMap.nesting === undefined) missing.push("CZĘŚCI / ELEMENTY");
+        if (colMap.expLayers === undefined) missing.push("UN");
+        if (colMap.startGlobal === undefined) missing.push("START");
+        if (colMap.endGlobal === undefined) missing.push("KONIEC");
+    } else if (currentMode === "CCS_S") {
+        if (colMap.item === undefined) missing.push("ITEM");
+        if (colMap.rev === undefined) missing.push("REV");
+        if (colMap.product === undefined) missing.push("NAZWA");
+        if (colMap.nesting === undefined) missing.push("CZĘŚCI / ELEMENTY");
+        if (colMap.expLayers === undefined) missing.push("UN");
+        if (colMap.startGlobal === undefined) missing.push("START");
+        if (colMap.endGlobal === undefined) missing.push("KONIEC");
+        if (colMap.tol === undefined) missing.push("TOLERANCJA");
+        if (colMap.tol_biax === undefined) missing.push("BIAX");
+        if (colMap.tol_undir === undefined) missing.push("UNDIR");
+    }
+
     if (colMap.userAwarie === undefined) missing.push("AWARIE");
-    if (colMap.tol === undefined) missing.push("TOLERANCJA");
-    if (colMap.expLayers === undefined) missing.push("LICZBA KITÓW/WARSTWA");
-    if (colMap.maxRolls === undefined) missing.push("MAX ROLEK");
     if (colMap.operator === undefined) missing.push("OPERATOR");
     if (colMap.workers === undefined) missing.push("ILOŚĆ PRACOWNIKÓW");
-    if (colMap.startGlobal === undefined) missing.push("Start (Day...");
-    if (colMap.endGlobal === undefined) missing.push("End (Day...");
 
     if (missing.length > 0) {
         document.getElementById("btn-fetch").style.display = "none";
@@ -321,9 +398,86 @@ async function initializeColumnMap(context) {
         await context.sync();
     }
 
-
-    
     dataStartRowIndex = headerRow + 1;
+    
+    // Zaktualizuj UI (Badge, etykiety oraz ukryj niepotrzebne kontrolki)
+    updateModeUI();
+    updateElementsVisibilityAndLabels();
+}
+
+function updateModeUI() {
+    const modeBadge = document.getElementById("mode-badge");
+    if (!modeBadge) return;
+    
+    if (currentMode === "VIS") {
+        modeBadge.innerText = "TRYB: VISDELTEX";
+        modeBadge.style.background = "#dbeafe";
+        modeBadge.style.color = "#1e40af";
+        modeBadge.style.borderColor = "#bfdbfe";
+    } else if (currentMode === "CCS_S") {
+        modeBadge.innerText = "TRYB: CCS_S";
+        modeBadge.style.background = "#fef3c7";
+        modeBadge.style.color = "#92400e";
+        modeBadge.style.borderColor = "#fde68a";
+    } else {
+        modeBadge.innerText = "TRYB: DOMYŚLNY";
+        modeBadge.style.background = "#e5e7eb";
+        modeBadge.style.color = "#374151";
+        modeBadge.style.borderColor = "#d1d5db";
+    }
+}
+
+function updateElementsVisibilityAndLabels() {
+    const isDefault = (currentMode === "DEFAULT");
+    const isCCS = (currentMode === "CCS_S");
+    
+    // Ukryj/pokaż sekcje rolek
+    if (isDefault) {
+        document.getElementById("container-warstwy").classList.remove("hidden");
+        document.getElementById("container-real-rolls").classList.remove("hidden");
+        document.getElementById("container-running-rolls").classList.remove("hidden");
+        document.getElementById("btn-change-rolls").classList.remove("hidden");
+    } else {
+        document.getElementById("container-warstwy").classList.add("hidden");
+        document.getElementById("container-real-rolls").classList.add("hidden");
+        document.getElementById("container-running-rolls").classList.add("hidden");
+        document.getElementById("btn-change-rolls").classList.add("hidden");
+        document.getElementById("change-rolls-panel").classList.add("hidden");
+    }
+    
+    // Ukryj/pokaż tolerancje
+    if (isDefault) {
+        document.getElementById("container-tol").classList.remove("hidden");
+        document.getElementById("container-tol-biax").classList.add("hidden");
+        document.getElementById("container-tol-undir").classList.add("hidden");
+    } else if (isCCS) {
+        document.getElementById("container-tol").classList.add("hidden");
+        document.getElementById("container-tol-biax").classList.remove("hidden");
+        document.getElementById("container-tol-undir").classList.remove("hidden");
+    } else {
+        // VIS
+        document.getElementById("container-tol").classList.add("hidden");
+        document.getElementById("container-tol-biax").classList.add("hidden");
+        document.getElementById("container-tol-undir").classList.add("hidden");
+    }
+    
+    // Zmień teksty etykiet
+    const lblItem = document.getElementById("lbl-item-caption");
+    const lblRev = document.getElementById("lbl-rev-caption");
+    const lblProduct = document.getElementById("lbl-product-caption");
+    const lblNesting = document.getElementById("lbl-nesting-caption");
+    
+    if (isDefault) {
+        if (lblItem) lblItem.innerText = "Item (B)";
+        if (lblRev) lblRev.innerText = "Rewizja (C)";
+        if (lblProduct) lblProduct.innerText = "Produkt (D)";
+        if (lblNesting) lblNesting.innerText = "Nesting (E)";
+    } else {
+        if (lblItem) lblItem.innerText = "ITEM";
+        if (lblRev) lblRev.innerText = "REV";
+        if (lblProduct) lblProduct.innerText = "NAZWA";
+        if (lblNesting) lblNesting.innerText = "CZĘŚCI / ELEMENTY";
+    }
 }
 
 async function scanForUnfinished(context) {
@@ -368,7 +522,8 @@ async function scanForUnfinished(context) {
 }
 
 function updateKitsCalc() {
-    const rolls = parseFloat(document.getElementById("in-real-rolls").value) || 0;
+    const rollsVal = document.getElementById("in-real-rolls").value;
+    const rolls = (currentMode === "DEFAULT") ? (parseFloat(rollsVal) || 0) : 1;
     const kitsPerLayer = parseFloat(document.getElementById("val-kpl").textContent) || 0;
     document.getElementById("lbl-calc-kits").innerText = Math.round(rolls * kitsPerLayer);
 }
@@ -430,11 +585,21 @@ async function fetchRowData(forcedRowIndex, isCont) {
             document.getElementById("val-rev").innerText = vals[colMap.rev] || "-";
             document.getElementById("val-product").innerText = vals[colMap.product] || "-";
             document.getElementById("val-nesting").innerText = vals[colMap.nesting] || "-";
-            document.getElementById("val-tol").innerText = vals[colMap.tol] || "-";
-            document.getElementById("val-warstwy").innerText = vals[colMap.maxRolls] || "-";
             document.getElementById("val-kpl").innerText = vals[colMap.expLayers] || "0";
             
-            let lastDeclaredRolls = vals[colMap.maxRolls] || "";
+            let lastDeclaredRolls = "";
+            if (currentMode === "DEFAULT") {
+                document.getElementById("val-tol").innerText = vals[colMap.tol] || "-";
+                document.getElementById("val-warstwy").innerText = vals[colMap.maxRolls] || "-";
+                lastDeclaredRolls = vals[colMap.maxRolls] || "";
+            } else if (currentMode === "CCS_S") {
+                document.getElementById("val-tol-biax").innerText = vals[colMap.tol_biax] || "-";
+                document.getElementById("val-tol-undir").innerText = vals[colMap.tol_undir] || "-";
+                lastDeclaredRolls = "1";
+            } else {
+                // Tryb VIS
+                lastDeclaredRolls = "1";
+            }
             document.getElementById("in-operator").value = "";
             document.getElementById("in-workers").value = "4";
             
@@ -674,7 +839,10 @@ async function writeStartTime() {
     currentWorkersCount = startWorkersCount;
     document.getElementById("val-current-workers").innerText = currentWorkersCount;
     
-    const realRolls = document.getElementById("in-real-rolls").value;
+    let realRolls = document.getElementById("in-real-rolls").value;
+    if (currentMode !== "DEFAULT") {
+        realRolls = "1";
+    }
     let machine = document.getElementById("sel-machine").value;
     
     if (!machine && resumeUnexpected) {

@@ -10,6 +10,12 @@
 </head>
 <body>
     <div class="container">
+        <!-- Badge trybu -->
+        <div id="mode-indicator-wrap" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: -8px; font-family: 'Inter', sans-serif;">
+            <span style="font-size: 10px; color: #6b7280; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Panel Sterowania</span>
+            <span id="mode-badge" style="font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 20px; background: #e5e7eb; color: #374151; border: 1px solid #d1d5db; text-transform: uppercase; letter-spacing: 0.5px;">TRYB: DOMYŚLNY</span>
+        </div>
+
         <header id="main-header">
             <h1>Panel Sterowania</h1>
             <p>Zaznacz wiersz lub wybierz z listy kontynuacji</p>
@@ -29,12 +35,14 @@
         <div id="data-card" class="card hidden">
             <h3 style="margin:0 0 12px 0; font-size:15px;" id="data-header">Dane z wiersza</h3>
             <div class="data-grid">
-                <div class="data-item"><span class="label">Item (B)</span><span class="value" id="val-item">---</span></div>
-                <div class="data-item"><span class="label">Rewizja (C)</span><span class="value" id="val-rev">---</span></div>
-                <div class="data-item"><span class="label">Produkt (D)</span><span class="value" id="val-product">---</span></div>
-                <div class="data-item"><span class="label">Nesting (E)</span><span class="value" id="val-nesting">---</span></div>
-                <div class="data-item"><span class="label">Tolerancja</span><span class="value" id="val-tol">---</span></div>
-                <div class="data-item"><span class="label">Oczek. l. rolek (Max)</span><span class="value" id="val-warstwy">---</span></div>
+                <div class="data-item"><span class="label" id="lbl-item-caption">Item (B)</span><span class="value" id="val-item">---</span></div>
+                <div class="data-item"><span class="label" id="lbl-rev-caption">Rewizja (C)</span><span class="value" id="val-rev">---</span></div>
+                <div class="data-item"><span class="label" id="lbl-product-caption">Produkt (D)</span><span class="value" id="val-product">---</span></div>
+                <div class="data-item"><span class="label" id="lbl-nesting-caption">Nesting (E)</span><span class="value" id="val-nesting">---</span></div>
+                <div class="data-item" id="container-tol"><span class="label">Tolerancja</span><span class="value" id="val-tol">---</span></div>
+                <div class="data-item hidden" id="container-tol-biax"><span class="label">Tolerancja BIAX</span><span class="value" id="val-tol-biax">---</span></div>
+                <div class="data-item hidden" id="container-tol-undir"><span class="label">Tolerancja UNDIR</span><span class="value" id="val-tol-undir">---</span></div>
+                <div class="data-item" id="container-warstwy"><span class="label">Oczek. l. rolek (Max)</span><span class="value" id="val-warstwy">---</span></div>
                 <div class="data-item" style="display:none;"><span class="label">Kits per layer</span><span class="value" id="val-kpl">---</span></div>
             </div>
 
@@ -47,7 +55,7 @@
                     <label for="in-workers">Liczba pracowników na start</label>
                     <input type="number" id="in-workers" value="4">
                 </div>
-                <div class="input-group">
+                <div class="input-group" id="container-real-rolls">
                     <label for="in-real-rolls">Zadeklarowana liczba rolek</label>
                     <input type="number" id="in-real-rolls" placeholder="Podaj ilość...">
                     <div style="font-weight:700; color:#3b82f6; font-size:14px; margin-top:4px;">Wyprodukowane kity: <span id="lbl-calc-kits">0</span></div>
@@ -83,7 +91,7 @@
                 Prod: -
             </div>
             
-            <div style="font-size: 15px; font-weight: 800; color:#2563eb; background:#eff6ff; padding:8px; border-radius:6px; border:1px solid #bfdbfe; margin-bottom:8px; text-align:center;">
+            <div id="container-running-rolls" style="font-size: 15px; font-weight: 800; color:#2563eb; background:#eff6ff; padding:8px; border-radius:6px; border:1px solid #bfdbfe; margin-bottom:8px; text-align:center;">
                 Liczba ciętych rolek: <span id="running-rolls-display" style="font-size:18px;">-</span>
             </div>
             
