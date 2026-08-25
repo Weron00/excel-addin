@@ -1,4 +1,4 @@
-const ADDIN_VERSION = "1.3";
+const ADDIN_VERSION = "1.3.1";
 let noPassMode = false;
 let currentMode = "DEFAULT";
 
@@ -224,18 +224,14 @@ async function initializeColumnMap(context) {
 
     // Określamy tryb na podstawie komórki nad START DANYCH
     let detectedMode = "DEFAULT";
-    let isNoPassFromModeCell = false;
     if (dataStartColIndex !== -1 && dataStartHeaderRow > 0) {
         const aboveVal = range.values[dataStartHeaderRow - 1][dataStartColIndex] 
             ? range.values[dataStartHeaderRow - 1][dataStartColIndex].toString().trim().toUpperCase() 
             : "";
-        if (aboveVal.includes("CCS_S")) {
+        if (aboveVal === "CCS_S") {
             detectedMode = "CCS_S";
-        } else if (aboveVal.includes("VIS")) {
+        } else if (aboveVal === "VIS") {
             detectedMode = "VIS";
-        }
-        if (aboveVal.includes("NOPASS")) {
-            isNoPassFromModeCell = true;
         }
     }
     currentMode = detectedMode;
@@ -343,12 +339,10 @@ async function initializeColumnMap(context) {
 
     // Odczytaj tryb NoPass z wiersza 1 (indeks 0) kolumny START DANYCH
     let noPassCellVal = "";
-    if (dataStartColIndex !== -1) {
-        const noPassRange = sheet.getRangeByIndexes(0, dataStartColIndex, 1, 1).load("values");
-        await context.sync();
-        noPassCellVal = noPassRange.values[0][0] ? noPassRange.values[0][0].toString().trim().toUpperCase() : "";
+    if (dataStartColIndex !== -1 && range.values[0] && range.values[0][dataStartColIndex] !== undefined) {
+        noPassCellVal = range.values[0][dataStartColIndex] ? range.values[0][dataStartColIndex].toString().trim().toUpperCase() : "";
     }
-    noPassMode = (noPassCellVal === "NOPASS") || isNoPassFromModeCell;
+    noPassMode = (noPassCellVal === "NOPASS");
 
     // Mapuj kolumny ze stałych offsetów od START DANYCH
     colMap.machine = dataStartColIndex + 1;
