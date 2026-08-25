@@ -1,4 +1,4 @@
-const ADDIN_VERSION = "1.3.1";
+const ADDIN_VERSION = "1.3.3";
 let noPassMode = false;
 let currentMode = "DEFAULT";
 
@@ -282,9 +282,11 @@ async function initializeColumnMap(context) {
                 else if (valUpper === "UN") { colMap.expLayers = c; }
                 else if (valUpper === "START") { colMap.startGlobal = c; startDayRow = r; }
                 else if (valUpper === "KONIEC") { colMap.endGlobal = c; }
-                else if (valUpper === "TOLERANCJA") { colMap.tol = c; }
-                else if (valUpper === "BIAX") { colMap.tol_biax = c; }
-                else if (valUpper === "UNDIR") { colMap.tol_undir = c; }
+                else if (valUpper === "TOLERANCJA") { 
+                    colMap.tol = c; 
+                    colMap.tol_biax = c; 
+                    colMap.tol_undir = c + 1; 
+                }
             }
         }
     }
@@ -320,8 +322,6 @@ async function initializeColumnMap(context) {
         if (colMap.startGlobal === undefined) missing.push("START");
         if (colMap.endGlobal === undefined) missing.push("KONIEC");
         if (colMap.tol === undefined) missing.push("TOLERANCJA");
-        if (colMap.tol_biax === undefined) missing.push("BIAX");
-        if (colMap.tol_undir === undefined) missing.push("UNDIR");
     }
 
     if (colMap.userAwarie === undefined) missing.push("AWARIE");
@@ -337,12 +337,20 @@ async function initializeColumnMap(context) {
         document.getElementById("btn-fetch").style.display = "inline-block";
     }
 
-    // Odczytaj tryb NoPass z wiersza 1 (indeks 0) kolumny START DANYCH
-    let noPassCellVal = "";
-    if (dataStartColIndex !== -1 && range.values[0] && range.values[0][dataStartColIndex] !== undefined) {
-        noPassCellVal = range.values[0][dataStartColIndex] ? range.values[0][dataStartColIndex].toString().trim().toUpperCase() : "";
+    // Odczytaj tryb NoPass z pierwszych 10 wierszy kolumny START DANYCH
+    let foundNoPass = false;
+    if (dataStartColIndex !== -1) {
+        for (let r = 0; r < 10; r++) {
+            const val = range.values[r] && range.values[r][dataStartColIndex] 
+                ? range.values[r][dataStartColIndex].toString().trim().toUpperCase() 
+                : "";
+            if (val === "NOPASS") {
+                foundNoPass = true;
+                break;
+            }
+        }
     }
-    noPassMode = (noPassCellVal === "NOPASS");
+    noPassMode = foundNoPass;
 
     // Mapuj kolumny ze stałych offsetów od START DANYCH
     colMap.machine = dataStartColIndex + 1;
@@ -594,12 +602,15 @@ async function fetchRowData(forcedRowIndex, isCont) {
             
             let lastDeclaredRolls = "";
             if (currentMode === "DEFAULT") {
-                document.getElementById("val-tol").innerText = vals[colMap.tol] || "-";
+                const tolVal = vals[colMap.tol];
+                document.getElementById("val-tol").innerText = (tolVal !== undefined && tolVal !== null && tolVal !== "") ? tolVal : "-";
                 document.getElementById("val-warstwy").innerText = vals[colMap.maxRolls] || "-";
                 lastDeclaredRolls = vals[colMap.maxRolls] || "";
             } else if (currentMode === "CCS_S") {
-                document.getElementById("val-tol-biax").innerText = vals[colMap.tol_biax] || "-";
-                document.getElementById("val-tol-undir").innerText = vals[colMap.tol_undir] || "-";
+                const tolBiax = vals[colMap.tol_biax];
+                const tolUndir = vals[colMap.tol_undir];
+                document.getElementById("val-tol-biax").innerText = (tolBiax !== undefined && tolBiax !== null && tolBiax !== "") ? tolBiax : "-";
+                document.getElementById("val-tol-undir").innerText = (tolUndir !== undefined && tolUndir !== null && tolUndir !== "") ? tolUndir : "-";
                 lastDeclaredRolls = "1";
             } else {
                 // Tryb VIS
