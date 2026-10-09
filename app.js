@@ -1,4 +1,4 @@
-const ADDIN_VERSION = "1.3.3";
+const ADDIN_VERSION = "1.3.5";
 let noPassMode = false;
 let currentMode = "DEFAULT";
 
@@ -8,6 +8,12 @@ function sheetUnprotect(sheet) {
 function sheetProtect(sheet) {
     if (!noPassMode) sheet.protection.protect({ allowAutoFilter: true, allowFormatCells: true, allowSort: true, allowInsertRows: true, allowDeleteRows: true }, "ShortP26");
 }
+
+const ACTIVE_SESSION_KEY = "nakladka_active_cutting_session";
+let intervalStartTimestamp = 0;
+let awariaStartTimestamp = 0;
+let loadingStartTimestamp = 0;
+let isSavingProcess = false;
 
 Office.onReady((info) => {
     document.getElementById("version-footer").innerText = "Wersja: " + ADDIN_VERSION;
@@ -43,11 +49,30 @@ Office.onReady((info) => {
     // Kalkulator na żywo
     document.getElementById("in-real-rolls").addEventListener("input", updateKitsCalc);
     
+    // Zapis notatek na bieżąco do sesji
+    const liveNotesInput = document.getElementById("in-running-notes");
+    if (liveNotesInput) {
+        liveNotesInput.addEventListener("input", saveActiveSession);
+    }
+
+    // Wybudzanie ze stanu uśpienia karty / przeglądarki Edge i Chrome
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("beforeunload", saveActiveSession);
+    window.addEventListener("pagehide", saveActiveSession);
+
     if (info.host === Office.HostType.Excel) {
         setStatus("Inicjalizacja...");
         Excel.run(async (context) => {
             try {
                 context.workbook.worksheets.onActivated.add(onWorksheetActivated);
+                
+                // Automatyczne przywrócenie sesji po odświeżeniu strony (F5 / uśpienie)
+                const restored = await tryRestoreActiveSession(context);
+                if (restored) {
+                    console.log("Pomyślnie wznowiono sesję po odświeżeniu.");
+                    return;
+                }
+                
                 await initializeColumnMap(context);
                 setStatus("Skanowanie listy niezakończonych...");
                 await scanForUnfinished(context);
@@ -61,6 +86,277 @@ Office.onReady((info) => {
     }
 });
 
+function handleVisibilityChange() {
+    if (document.visibilityState === "visible") {
+        if (intervalStartTimestamp > 0 && timerInterval !== null) {
+            secondsElapsed = Math.floor((Date.now() - intervalStartTimestamp) / 1000);
+            if (secondsElapsed < 0) secondsElapsed = 0;
+            
+            if (isAwariaActive && awariaStartTimestamp > 0) {
+                awariaSecondsElapsed = Math.floor((Date.now() - awariaStartTimestamp) / 1000);
+                if (awariaSecondsElapsed < 0) awariaSecondsElapsed = 0;
+                const awariaTimerEl = document.getElementById("awaria-timer");
+                if (awariaTimerEl) awariaTimerEl.innerText = secondsToHms(awariaSecondsElapsed);
+            }
+            
+            if (isLoadingActive && loadingStartTimestamp > 0) {
+                loadingSecondsElapsed = Math.floor((Date.now() - loadingStartTimestamp) / 1000);
+                if (loadingSecondsElapsed < 0) loadingSecondsElapsed = 0;
+                const loadingTimerEl = document.getElementById("loading-timer");
+                if (loadingTimerEl) loadingTimerEl.innerText = secondsToHms(loadingSecondsElapsed);
+            }
+            
+            updateTimerDisplay();
+            saveActiveSession();
+        }
+    } else {
+        saveActiveSession();
+    }
+}
+
+function saveActiveSession() {
+    if (currentRowIndex === -1 || !activeSheetName || intervalStartTimestamp <= 0) return;
+    
+    try {
+        const sessionData = {
+            activeSheetName: activeSheetName,
+            currentRowIndex: currentRowIndex,
+            currentMode: currentMode,
+            isContinuing: isContinuing,
+            operator: document.getElementById("in-operator").value.trim() || "Brak",
+            startWorkersCount: startWorkersCount,
+            currentWorkersCount: currentWorkersCount,
+            intervalWorkerDiff: intervalWorkerDiff,
+            currentWorkerGlobalString: currentWorkerGlobalString,
+            previousGlobalWorkerString: previousGlobalWorkerString,
+            currentOperatorGlobalString: currentOperatorGlobalString,
+            realRolls: document.getElementById("in-real-rolls").value,
+            machine: document.getElementById("sel-machine").value || selectedMachineForContinuation,
+            currentIntervalIndex: currentIntervalIndex,
+            currentIntervalStartCol: currentIntervalStartCol,
+            intervalStartTime: intervalStartTimestamp,
+            previousTotalGrossSeconds: previousTotalGrossSeconds,
+            unexpectedIntervalDuration: unexpectedIntervalDuration,
+            
+            isAwariaActive: isAwariaActive,
+            awariaStartTimestamp: awariaStartTimestamp,
+            awariaSecondsElapsed: awariaSecondsElapsed,
+            totalAwariaSecondsGlobal: totalAwariaSecondsGlobal,
+            
+            isLoadingActive: isLoadingActive,
+            loadingStartTimestamp: loadingStartTimestamp,
+            loadingSecondsElapsed: loadingSecondsElapsed,
+            totalLoadingSecondsGlobal: totalLoadingSecondsGlobal,
+            currentIntervalLoadingSeconds: currentIntervalLoadingSeconds,
+            
+            loadedBreakMinutes: loadedBreakMinutes,
+            theoreticalSeconds: theoreticalSeconds,
+            
+            notes: document.getElementById("in-running-notes").value,
+            item: document.getElementById("val-item").innerText,
+            rev: document.getElementById("val-rev").innerText,
+            product: document.getElementById("val-product").innerText,
+            kpl: document.getElementById("val-kpl").innerText,
+            
+            isStopped: !document.getElementById("incidents-card").classList.contains("hidden"),
+            lastHeartbeat: Date.now()
+        };
+        localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(sessionData));
+        sessionStorage.setItem("nakladka_running_tab", "true");
+    } catch (e) {
+        console.warn("Błąd zapisu sesji:", e);
+    }
+}
+
+function clearActiveSession() {
+    try {
+        localStorage.removeItem(ACTIVE_SESSION_KEY);
+        sessionStorage.removeItem("nakladka_running_tab");
+    } catch (e) {
+        console.warn("Błąd usuwania sesji:", e);
+    }
+}
+
+async function tryRestoreActiveSession(context) {
+    const raw = localStorage.getItem(ACTIVE_SESSION_KEY);
+    if (!raw) return false;
+    
+    let session;
+    try {
+        session = JSON.parse(raw);
+    } catch (e) {
+        localStorage.removeItem(ACTIVE_SESSION_KEY);
+        return false;
+    }
+    
+    if (!session || !session.activeSheetName || session.currentRowIndex === undefined || session.currentRowIndex < 0) {
+        localStorage.removeItem(ACTIVE_SESSION_KEY);
+        return false;
+    }
+    
+    // Maksymalny dopuszczalny wiek aktywnej sesji (16 godzin - zakres roboczej zmiany)
+    const now = Date.now();
+    const sessionAgeMs = now - (session.lastHeartbeat || session.intervalStartTime || now);
+    const MAX_SESSION_AGE_MS = 16 * 60 * 60 * 1000;
+    if (sessionAgeMs > MAX_SESSION_AGE_MS) {
+        console.log("Sesja w pamięci jest przedawniona (>16h). Anulowanie.");
+        localStorage.removeItem(ACTIVE_SESSION_KEY);
+        return false;
+    }
+    
+    try {
+        const worksheets = context.workbook.worksheets.load("items/name");
+        await context.sync();
+        const targetSheet = worksheets.items.find(s => s.name === session.activeSheetName);
+        if (!targetSheet) {
+            console.warn("Arkusz sesji nie został znaleziony:", session.activeSheetName);
+            localStorage.removeItem(ACTIVE_SESSION_KEY);
+            return false;
+        }
+        
+        targetSheet.activate();
+        activeSheetName = session.activeSheetName;
+        await context.sync();
+        
+        await initializeColumnMap(context);
+        
+        currentRowIndex = session.currentRowIndex;
+        currentMode = session.currentMode || currentMode;
+        isContinuing = !!session.isContinuing;
+        
+        startWorkersCount = session.startWorkersCount || 4;
+        currentWorkersCount = session.currentWorkersCount || startWorkersCount;
+        intervalWorkerDiff = session.intervalWorkerDiff || 0;
+        currentWorkerGlobalString = session.currentWorkerGlobalString || "";
+        previousGlobalWorkerString = session.previousGlobalWorkerString || "";
+        currentOperatorGlobalString = session.currentOperatorGlobalString || "";
+        
+        currentIntervalIndex = session.currentIntervalIndex !== undefined ? session.currentIntervalIndex : 0;
+        currentIntervalStartCol = session.currentIntervalStartCol !== undefined ? session.currentIntervalStartCol : -1;
+        intervalStartTimestamp = session.intervalStartTime || Date.now();
+        previousTotalGrossSeconds = session.previousTotalGrossSeconds || 0;
+        unexpectedIntervalDuration = session.unexpectedIntervalDuration || 0;
+        
+        totalAwariaSecondsGlobal = session.totalAwariaSecondsGlobal || 0;
+        totalLoadingSecondsGlobal = session.totalLoadingSecondsGlobal || 0;
+        currentIntervalLoadingSeconds = session.currentIntervalLoadingSeconds || 0;
+        
+        loadedBreakMinutes = session.loadedBreakMinutes || 0;
+        theoreticalSeconds = session.theoreticalSeconds || 0;
+        
+        document.getElementById("in-operator").value = session.operator || "";
+        document.getElementById("in-workers").value = currentWorkersCount;
+        document.getElementById("val-current-workers").innerText = currentWorkersCount;
+        
+        const realRolls = session.realRolls || (currentMode === "DEFAULT" ? "1" : "1");
+        document.getElementById("in-real-rolls").value = realRolls;
+        document.getElementById("running-rolls-display").innerText = realRolls;
+        
+        if (session.item) document.getElementById("val-item").innerText = session.item;
+        if (session.rev) document.getElementById("val-rev").innerText = session.rev;
+        if (session.product) document.getElementById("val-product").innerText = session.product;
+        if (session.kpl) document.getElementById("val-kpl").innerText = session.kpl;
+        
+        const iTxt = document.getElementById("val-item").innerText;
+        const rTxt = document.getElementById("val-rev").innerText;
+        const pTxt = document.getElementById("val-product").innerText;
+        document.getElementById("running-info").innerHTML = `Item: ${iTxt}, Rev: ${rTxt}<br>Prod: ${pTxt}`;
+        
+        if (session.notes) {
+            document.getElementById("in-running-notes").value = session.notes;
+            document.getElementById("in-other-incidents").value = session.notes;
+        }
+        
+        updateModeUI();
+        updateElementsVisibilityAndLabels();
+        updateKitsCalc();
+        
+        // Jeśli sesja była zatrzymana przyciskiem i czekała na wybór opcji zakończenia:
+        if (session.isStopped) {
+            document.getElementById("initial-card").classList.add("hidden");
+            document.getElementById("data-card").classList.add("hidden");
+            document.getElementById("machine-card").classList.add("hidden");
+            document.getElementById("running-card").classList.add("hidden");
+            document.getElementById("machine-warning-card").classList.add("hidden");
+            document.getElementById("unexpected-card").classList.add("hidden");
+            document.getElementById("main-header").classList.remove("hidden");
+            document.getElementById("incidents-card").classList.remove("hidden");
+            document.body.classList.remove("timer-active");
+            setStatus("Czas zatrzymany. Wybierz opcję zakończenia.");
+            return true;
+        }
+        
+        secondsElapsed = Math.floor((Date.now() - intervalStartTimestamp) / 1000);
+        if (secondsElapsed < 0) secondsElapsed = 0;
+        
+        document.getElementById("initial-card").classList.add("hidden");
+        document.getElementById("data-card").classList.add("hidden");
+        document.getElementById("machine-card").classList.add("hidden");
+        document.getElementById("machine-warning-card").classList.add("hidden");
+        document.getElementById("unexpected-card").classList.add("hidden");
+        document.getElementById("incidents-card").classList.add("hidden");
+        document.getElementById("main-header").classList.add("hidden");
+        document.getElementById("running-card").classList.remove("hidden");
+        
+        clearAllTimers();
+        
+        isAwariaActive = !!session.isAwariaActive;
+        if (isAwariaActive) {
+            awariaStartTimestamp = session.awariaStartTimestamp || Date.now();
+            awariaSecondsElapsed = Math.floor((Date.now() - awariaStartTimestamp) / 1000);
+            if (awariaSecondsElapsed < 0) awariaSecondsElapsed = 0;
+            
+            document.body.classList.add("awaria-active");
+            document.body.classList.remove("timer-active");
+            const btnAwaria = document.getElementById("btn-awaria");
+            btnAwaria.innerText = "ZAKOŃCZ STAN AWARII";
+            const awariaTimerEl = document.getElementById("awaria-timer");
+            awariaTimerEl.classList.remove("hidden");
+            awariaTimerEl.innerText = secondsToHms(awariaSecondsElapsed);
+            
+            awariaTimerInterval = setInterval(() => {
+                awariaSecondsElapsed = Math.floor((Date.now() - awariaStartTimestamp) / 1000);
+                if (awariaSecondsElapsed < 0) awariaSecondsElapsed = 0;
+                awariaTimerEl.innerText = secondsToHms(awariaSecondsElapsed);
+                updateTimerDisplay();
+            }, 1000);
+        } else {
+            document.body.classList.add("timer-active");
+        }
+        
+        isLoadingActive = !!session.isLoadingActive;
+        if (isLoadingActive) {
+            loadingStartTimestamp = session.loadingStartTimestamp || Date.now();
+            loadingSecondsElapsed = Math.floor((Date.now() - loadingStartTimestamp) / 1000);
+            if (loadingSecondsElapsed < 0) loadingSecondsElapsed = 0;
+            
+            document.body.classList.add("loading-active");
+            const btnLoading = document.getElementById("btn-loading");
+            btnLoading.innerText = "ZAKOŃCZ ŁADOWANIE";
+            const loadingTimerEl = document.getElementById("loading-timer");
+            loadingTimerEl.classList.remove("hidden");
+            loadingTimerEl.innerText = secondsToHms(loadingSecondsElapsed);
+            
+            loadingTimerInterval = setInterval(() => {
+                if (!isAwariaActive) {
+                    loadingSecondsElapsed = Math.floor((Date.now() - loadingStartTimestamp) / 1000);
+                    if (loadingSecondsElapsed < 0) loadingSecondsElapsed = 0;
+                    loadingTimerEl.innerText = secondsToHms(loadingSecondsElapsed);
+                }
+            }, 1000);
+        }
+        
+        startTimer();
+        startAutoSave();
+        
+        setStatus("Wznowiono aktywne zadanie po odświeżeniu strony.");
+        return true;
+    } catch (err) {
+        console.error("Błąd przywracania sesji:", err);
+        return false;
+    }
+}
+
 let colMap = {};
 let dataStartRowIndex = -1;
 let currentRowIndex = -1;
@@ -73,6 +369,26 @@ let autoSaveInterval = null;
 let secondsElapsed = 0;
 let forceTargetUpdate = false;
 let isContinuing = false;
+let isStartingProcess = false;
+
+function clearAllTimers() {
+    if (timerInterval !== null) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+    }
+    if (autoSaveInterval !== null) {
+        clearInterval(autoSaveInterval);
+        autoSaveInterval = null;
+    }
+    if (awariaTimerInterval !== null) {
+        clearInterval(awariaTimerInterval);
+        awariaTimerInterval = null;
+    }
+    if (loadingTimerInterval !== null) {
+        clearInterval(loadingTimerInterval);
+        loadingTimerInterval = null;
+    }
+}
 
 // Przedziały
 let currentIntervalIndex = -1; // 0 do 9
@@ -174,10 +490,9 @@ function hmsToSeconds(hms) {
 }
 
 async function onWorksheetActivated(event) {
-    if (timerInterval !== null) return;
+    if (timerInterval !== null || localStorage.getItem(ACTIVE_SESSION_KEY)) return;
     
-    clearInterval(timerInterval);
-    stopAutoSave();
+    clearAllTimers();
     document.getElementById("data-card").classList.add("hidden");
     document.getElementById("machine-card").classList.add("hidden");
     document.getElementById("running-card").classList.add("hidden");
@@ -495,7 +810,30 @@ function updateElementsVisibilityAndLabels() {
 
 async function scanForUnfinished(context) {
     const sheet = context.workbook.worksheets.getActiveWorksheet();
-    const range = sheet.getRangeByIndexes(dataStartRowIndex, 0, 2000, 150).load("values");
+    if (dataStartRowIndex < 0) dataStartRowIndex = 3;
+    
+    // Optymalizacja: ładowanie tylko niezbędnych kolumn zamiast 150 kolumn x 2000 wierszy
+    const maxColNeeded = Math.max(
+        (colMap.startGlobal !== undefined ? colMap.startGlobal : 26),
+        (colMap.endGlobal !== undefined ? colMap.endGlobal : 27),
+        (colMap.item !== undefined ? colMap.item : 3),
+        (colMap.machine !== undefined ? colMap.machine : 24)
+    );
+    const colsToLoad = Math.max(maxColNeeded + 1, 30);
+    
+    let rowsToLoad = 500;
+    try {
+        const used = sheet.getUsedRangeOrNullObject(true);
+        used.load("rowCount");
+        await context.sync();
+        if (!used.isNullObject && used.rowCount > dataStartRowIndex) {
+            rowsToLoad = Math.min(Math.max(used.rowCount - dataStartRowIndex + 5, 20), 1000);
+        }
+    } catch (e) {
+        rowsToLoad = 500;
+    }
+    
+    const range = sheet.getRangeByIndexes(dataStartRowIndex, 0, rowsToLoad, colsToLoad).load("values");
     await context.sync();
     
     const listContainer = document.getElementById("unfinished-list");
@@ -762,6 +1100,10 @@ function handleToMachineClick() {
 }
 
 document.getElementById("btn-unexp-finished").onclick = async () => {
+    if (isStartingProcess) return;
+    isStartingProcess = true;
+    const btn = document.getElementById("btn-unexp-finished");
+    if (btn) btn.disabled = true;
     resumeUnexpected = false;
     try {
         await Excel.run(async (ctx) => {
@@ -775,10 +1117,14 @@ document.getElementById("btn-unexp-finished").onclick = async () => {
         showMachineSelection();
     } catch (e) {
         setStatus("Błąd dopisywania ZAMKNIĘTO: " + e.message);
+    } finally {
+        if (btn) btn.disabled = false;
+        isStartingProcess = false;
     }
 };
 
 document.getElementById("btn-unexp-resume").onclick = () => {
+    if (isStartingProcess) return;
     resumeUnexpected = true;
     document.getElementById("unexpected-card").classList.add("hidden");
     writeStartTime();
@@ -825,6 +1171,7 @@ async function showMachineSelection() {
 }
 
 function handleStartTimerClick() {
+    if (isStartingProcess) return;
     const machine = document.getElementById("sel-machine").value;
     
     // Weryfikacja innej otwartej pracy na tej samej maszynie
@@ -841,6 +1188,7 @@ function handleStartTimerClick() {
 }
 
 document.getElementById("btn-mach-warn-continue").onclick = () => {
+    if (isStartingProcess) return;
     document.getElementById("machine-warning-card").classList.add("hidden");
     writeStartTime();
 };
@@ -850,6 +1198,15 @@ document.getElementById("btn-mach-warn-cancel").onclick = () => {
 };
 
 async function writeStartTime() {
+    if (isStartingProcess) return;
+    isStartingProcess = true;
+    const btnStart = document.getElementById("btn-start-timer");
+    const btnWarn = document.getElementById("btn-mach-warn-continue");
+    const btnResume = document.getElementById("btn-unexp-resume");
+    if (btnStart) btnStart.disabled = true;
+    if (btnWarn) btnWarn.disabled = true;
+    if (btnResume) btnResume.disabled = true;
+
     const operator = document.getElementById("in-operator").value.trim() || "Brak";
     startWorkersCount = parseInt(document.getElementById("in-workers").value) || 4;
     currentWorkersCount = startWorkersCount;
@@ -967,29 +1324,50 @@ async function writeStartTime() {
             document.body.classList.add("timer-active"); // Tło zielone!
             document.getElementById("main-header").classList.add("hidden");
             
+            clearAllTimers();
+            if (resumeUnexpected) {
+                intervalStartTimestamp = Date.now() - (secondsElapsed * 1000);
+            } else {
+                intervalStartTimestamp = Date.now();
+                secondsElapsed = 0;
+            }
             startTimer();
             startAutoSave();
+            resumeUnexpected = false;
+            saveActiveSession();
             setStatus("W trakcie pracy...");
         });
     } catch (error) {
         console.error(error);
         setStatus("Błąd Start: " + error.message);
+    } finally {
+        isStartingProcess = false;
+        if (btnStart) btnStart.disabled = false;
+        if (btnWarn) btnWarn.disabled = false;
+        if (btnResume) btnResume.disabled = false;
     }
 }
 
 function startTimer() {
-    if (!resumeUnexpected) secondsElapsed = 0;
+    if (timerInterval !== null) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+    }
+    if (intervalStartTimestamp <= 0) {
+        intervalStartTimestamp = Date.now();
+    }
+    secondsElapsed = Math.floor((Date.now() - intervalStartTimestamp) / 1000);
+    if (secondsElapsed < 0) secondsElapsed = 0;
+    
     updateTimerDisplay();
-    let lastTick = Date.now();
-    let accumulatedMs = secondsElapsed * 1000;
     
     timerInterval = setInterval(() => {
-        const now = Date.now();
-        const delta = now - lastTick;
-        lastTick = now;
-        
-        accumulatedMs += delta;
-        secondsElapsed = Math.floor(accumulatedMs / 1000);
+        if (intervalStartTimestamp > 0) {
+            secondsElapsed = Math.floor((Date.now() - intervalStartTimestamp) / 1000);
+            if (secondsElapsed < 0) secondsElapsed = 0;
+        } else {
+            secondsElapsed++;
+        }
         
         updateTimerDisplay();
     }, 1000);
@@ -1040,6 +1418,10 @@ function updateTimerDisplay() {
 }
 
 function startAutoSave() {
+    if (autoSaveInterval !== null) {
+        clearInterval(autoSaveInterval);
+        autoSaveInterval = null;
+    }
     autoSaveInterval = setInterval(async () => {
         if (currentRowIndex !== -1 && currentIntervalStartCol !== -1) {
             try {
@@ -1072,6 +1454,8 @@ function startAutoSave() {
                     sheetProtect(sheet);
                     await ctx.sync();
                 });
+                // Odśwież stan sesji w tle
+                saveActiveSession();
             } catch (e) {
                 console.warn("Autozapis w tle:", e);
             }
@@ -1080,7 +1464,7 @@ function startAutoSave() {
 }
 
 function stopAutoSave() {
-    if (autoSaveInterval) {
+    if (autoSaveInterval !== null) {
         clearInterval(autoSaveInterval);
         autoSaveInterval = null;
     }
@@ -1116,6 +1500,8 @@ function adjustWorkers(amount) {
         sheetProtect(sheet);
         await ctx.sync();
     }).catch(e => console.warn(e));
+    
+    saveActiveSession();
 }
 
 function toggleAwaria() {
@@ -1129,19 +1515,18 @@ function toggleAwaria() {
         btn.innerText = "ZAKOŃCZ STAN AWARII";
         timerUI.classList.remove("hidden");
         
+        awariaStartTimestamp = Date.now();
         awariaSecondsElapsed = 0;
         timerUI.innerText = secondsToHms(0);
         updateTimerDisplay(); // aktualizacja by zamrozić netto
-        let lastTick = Date.now();
-        let accumulatedMs = 0;
         
+        if (awariaTimerInterval !== null) {
+            clearInterval(awariaTimerInterval);
+            awariaTimerInterval = null;
+        }
         awariaTimerInterval = setInterval(() => {
-            const now = Date.now();
-            const delta = now - lastTick;
-            lastTick = now;
-            
-            accumulatedMs += delta;
-            awariaSecondsElapsed = Math.floor(accumulatedMs / 1000);
+            awariaSecondsElapsed = Math.floor((Date.now() - awariaStartTimestamp) / 1000);
+            if (awariaSecondsElapsed < 0) awariaSecondsElapsed = 0;
             
             timerUI.innerText = secondsToHms(awariaSecondsElapsed);
             updateTimerDisplay(); // aktualizacja by zamrozić netto w trakcie awarii
@@ -1151,9 +1536,14 @@ function toggleAwaria() {
         document.body.classList.add("timer-active"); // Przywraca zielony
         btn.innerText = "STAN AWARII";
         timerUI.classList.add("hidden");
-        clearInterval(awariaTimerInterval);
+        if (awariaTimerInterval !== null) {
+            clearInterval(awariaTimerInterval);
+            awariaTimerInterval = null;
+        }
         
         totalAwariaSecondsGlobal += awariaSecondsElapsed;
+        awariaStartTimestamp = 0;
+        awariaSecondsElapsed = 0;
         
         // Zapisz sumę awarii do excela
         Excel.run(async (ctx) => {
@@ -1167,6 +1557,7 @@ function toggleAwaria() {
             await ctx.sync();
         }).catch(e => console.warn(e));
     }
+    saveActiveSession();
 }
 
 function toggleLoading() {
@@ -1179,20 +1570,18 @@ function toggleLoading() {
         btn.innerText = "ZAKOŃCZ ŁADOWANIE";
         timerUI.classList.remove("hidden");
         
+        loadingStartTimestamp = Date.now();
         loadingSecondsElapsed = 0;
         timerUI.innerText = secondsToHms(0);
         
-        let lastTick = Date.now();
-        let accumulatedMs = 0;
-        
+        if (loadingTimerInterval !== null) {
+            clearInterval(loadingTimerInterval);
+            loadingTimerInterval = null;
+        }
         loadingTimerInterval = setInterval(() => {
-            const now = Date.now();
-            const delta = now - lastTick;
-            lastTick = now;
-            
             if (!isAwariaActive) {
-                accumulatedMs += delta;
-                loadingSecondsElapsed = Math.floor(accumulatedMs / 1000);
+                loadingSecondsElapsed = Math.floor((Date.now() - loadingStartTimestamp) / 1000);
+                if (loadingSecondsElapsed < 0) loadingSecondsElapsed = 0;
                 timerUI.innerText = secondsToHms(loadingSecondsElapsed);
             }
         }, 1000);
@@ -1200,10 +1589,14 @@ function toggleLoading() {
         document.body.classList.remove("loading-active");
         btn.innerText = "ŁADOWANIE MAT.";
         timerUI.classList.add("hidden");
-        clearInterval(loadingTimerInterval);
+        if (loadingTimerInterval !== null) {
+            clearInterval(loadingTimerInterval);
+            loadingTimerInterval = null;
+        }
         
         totalLoadingSecondsGlobal += loadingSecondsElapsed;
         currentIntervalLoadingSeconds += loadingSecondsElapsed;
+        loadingStartTimestamp = 0;
         loadingSecondsElapsed = 0;
         
         Excel.run(async (ctx) => {
@@ -1217,6 +1610,7 @@ function toggleLoading() {
             await ctx.sync();
         }).catch(e => console.warn(e));
     }
+    saveActiveSession();
 }
 
 async function confirmChangeRolls() {
@@ -1225,8 +1619,6 @@ async function confirmChangeRolls() {
         alert("Błędna liczba rolek!");
         return;
     }
-    
-    // Weryfikacja usunięta na prośbę użytkownika
 
     try {
         setStatus("Zmiana rolek - zapis...");
@@ -1271,6 +1663,7 @@ async function confirmChangeRolls() {
             document.getElementById("change-rolls-panel").classList.add("hidden");
             document.getElementById("in-new-rolls").value = "";
         });
+        saveActiveSession();
     } catch (e) {
         console.error(e);
         setStatus("Błąd zmiany rolek: " + e.message);
@@ -1286,9 +1679,9 @@ function handleStop() {
         alert("Najpierw zakończ Ładowanie Materiału!");
         return;
     }
-    clearInterval(timerInterval);
-    timerInterval = null;
-    stopAutoSave(); 
+    clearAllTimers();
+    resumeUnexpected = false;
+    isStartingProcess = false;
     
     document.getElementById("in-other-incidents").value = document.getElementById("in-running-notes").value;
     
@@ -1297,10 +1690,22 @@ function handleStop() {
     document.getElementById("main-header").classList.remove("hidden");
     document.getElementById("incidents-card").classList.remove("hidden");
     document.body.classList.remove("timer-active"); // Usuń zielone tło
+    saveActiveSession();
     setStatus("Czas zatrzymany. Wybierz opcję zakończenia.");
 }
 
 async function saveIncidents(fullComplete) {
+    if (isSavingProcess) return;
+    isSavingProcess = true;
+    
+    const btnFull = document.getElementById("btn-save-full");
+    const btnPartial = document.getElementById("btn-save-partial");
+    const origFullText = btnFull ? btnFull.innerText : "";
+    const origPartialText = btnPartial ? btnPartial.innerText : "";
+    
+    if (btnFull) { btnFull.disabled = true; btnFull.innerText = "⏳ Zapisywanie..."; }
+    if (btnPartial) { btnPartial.disabled = true; btnPartial.innerText = "⏳ Zapisywanie..."; }
+    
     let newlyCheckedMinutes = 0;
     document.querySelectorAll(".break-chk:checked").forEach(chk => {
         newlyCheckedMinutes += parseInt(chk.value) || 0;
@@ -1310,7 +1715,7 @@ async function saveIncidents(fullComplete) {
     const incidentsText = document.getElementById("in-other-incidents").value;
     
     try {
-        setStatus("Zapisywanie...");
+        setStatus("Zapisywanie w toku... Proszę czekać.");
         await Excel.run(async (context) => {
             const sheet = context.workbook.worksheets.getItem(activeSheetName);
             sheetUnprotect(sheet);
@@ -1328,129 +1733,151 @@ async function saveIncidents(fullComplete) {
             if (fullComplete) {
                 sheet.getCell(currentRowIndex, colMap.endGlobal).values = [[dateNum]];
             }
-            // --- PODSUMOWANIE (3 kolumny na samym końcu przedziałów = intervalsStart + 70) ---
-                const dataRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 70).load("values");
-                await context.sync();
-                
-                const ivals = dataRange.values[0];
-                let totalTimeMs = 0;
-                let totalKits = 0;
-                let sumWorkerTime = 0;
-                
-                const kitsPerLayer = parseFloat(document.getElementById("val-kpl").textContent) || 0;
-                
-                for (let i = 0; i < 10; i++) {
-                    const wStart = parseFloat(ivals[i*7 + 1]);
-                    const wStop = parseFloat(ivals[i*7 + 2]);
-                    const rolls = parseFloat(ivals[i*7 + 3]) || 0;
-                    const startStr = ivals[i*7 + 4] ? ivals[i*7 + 4].toString().replace(/^'/, "") : "";
-                    const stopStr = ivals[i*7 + 5] ? ivals[i*7 + 5].toString().replace(/^'/, "") : "";
-                    
-                    if (startStr && rolls > 0) {
-                        if (i === 0 || rolls !== parseFloat(ivals[(i-1)*7 + 3])) {
-                            totalKits += (rolls * kitsPerLayer);
-                        }
-                    }
-
-                    if (startStr && stopStr) {
-                        const tStart = parseCustomDate(startStr);
-                        const tStop = parseCustomDate(stopStr);
-                        if (!isNaN(tStart) && !isNaN(tStop)) {
-                            const durationMs = tStop - tStart;
-                            if (durationMs > 0) {
-                                totalTimeMs += durationMs;
-                                const avgWorkers = (isNaN(wStart) || isNaN(wStop)) ? 0 : ((wStart + wStop) / 2);
-                                sumWorkerTime += (avgWorkers * durationMs);
-                            }
-                        }
-                    }
-                }
-                
-                const totalAwariaMs = totalAwariaSecondsGlobal * 1000;
-                let netTimeMs = totalTimeMs - totalAwariaMs - totalBreakMs;
-                if (netTimeMs < 0) netTimeMs = 0;
-                
-                let avgWorkersFinal = 0;
-                if (totalTimeMs > 0) {
-                    avgWorkersFinal = sumWorkerTime / totalTimeMs;
-                }
-                
-                const netTimeHms = secondsToHms(netTimeMs / 1000);
-                
-                // Write summary to explicitly mapped columns
-                if (colMap.netTime !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.netTime); c.values = [[safeStr(netTimeHms)]]; c.numberFormat = [["@"]]; }
-                if (colMap.loadingTime !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.loadingTime); c.values = [[safeStr(secondsToHms(totalLoadingSecondsGlobal))]]; c.numberFormat = [["@"]]; }
-                if (colMap.breakTime !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.breakTime); c.values = [[totalBreakMinutes > 0 ? safeStr(secondsToHms(totalBreakMinutes * 60)) : ""]]; c.numberFormat = [["@"]]; }
-                if (colMap.totalKits !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.totalKits); c.values = [[Math.round(totalKits)]]; c.numberFormat = [["0"]]; }
-                if (colMap.avgWorkers !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.avgWorkers); c.values = [[Number(avgWorkersFinal.toFixed(2))]]; c.numberFormat = [["0.00"]]; }
-                
-                // Zapisz KOD PRZERW
-
-                if (colMap.breakCodes !== undefined) {
-                    let breakCodeParts = [];
-                    document.querySelectorAll(".break-chk:checked").forEach(chk => {
-                        const parts = chk.id.replace("chk-b", "").split("-");
-                        if (parts.length === 2) {
-                            breakCodeParts.push(`Z${parts[0]}P${parts[1]}`);
-                        }
-                    });
-                    sheet.getCell(currentRowIndex, colMap.breakCodes).values = [[breakCodeParts.join(", ")]];
-                }
-                
-                // Generowanie nagłówków i obramowań dla wykorzystanych przedziałów
-                if (colMap.intervalsStart !== undefined && currentIntervalIndex >= 0) {
-                    const usedColsCount = (currentIntervalIndex + 1) * 7;
-                    for (let i = 0; i <= currentIntervalIndex; i++) {
-                        const sCol = colMap.intervalsStart + 1 + (i * 7);
-                        sheet.getCell(dataStartRowIndex - 1, sCol + 0).values = [[`Operator ${i+1}`]];
-                        sheet.getCell(dataStartRowIndex - 1, sCol + 1).values = [[`Prac. Start ${i+1}`]];
-                        sheet.getCell(dataStartRowIndex - 1, sCol + 2).values = [[`Prac. Koniec ${i+1}`]];
-                        sheet.getCell(dataStartRowIndex - 1, sCol + 3).values = [[`Rolki ${i+1}`]];
-                        sheet.getCell(dataStartRowIndex - 1, sCol + 4).values = [[`Start ${i+1}`]];
-                        sheet.getCell(dataStartRowIndex - 1, sCol + 5).values = [[`Koniec ${i+1}`]];
-                        sheet.getCell(dataStartRowIndex - 1, sCol + 6).values = [[`Ładowanie Mat. ${i+1}`]];
-                    }
-                    
-                    const intervalHeaderRange = sheet.getRangeByIndexes(dataStartRowIndex - 1, colMap.intervalsStart + 1, 1, usedColsCount);
-                    intervalHeaderRange.format.borders.getItem('EdgeTop').style = 'Continuous';
-                    intervalHeaderRange.format.borders.getItem('EdgeBottom').style = 'Continuous';
-                    intervalHeaderRange.format.borders.getItem('EdgeLeft').style = 'Continuous';
-                    intervalHeaderRange.format.borders.getItem('EdgeRight').style = 'Continuous';
-                    intervalHeaderRange.format.borders.getItem('InsideVertical').style = 'Continuous';
-                    intervalHeaderRange.format.borders.color = "#a3a3a3";
-                    intervalHeaderRange.format.borders.weight = "Thin";
-                    
-                    const intervalDataRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, usedColsCount);
-                    intervalDataRange.format.borders.getItem('EdgeTop').style = 'Continuous';
-                    intervalDataRange.format.borders.getItem('EdgeBottom').style = 'Continuous';
-                    intervalDataRange.format.borders.getItem('EdgeLeft').style = 'Continuous';
-                    intervalDataRange.format.borders.getItem('EdgeRight').style = 'Continuous';
-                    intervalDataRange.format.borders.getItem('InsideVertical').style = 'Continuous';
-                    intervalDataRange.format.borders.color = "#a3a3a3";
-                    intervalDataRange.format.borders.weight = "Thin";
-                }
             
+            // --- PODSUMOWANIE (3 kolumny na samym końcu przedziałów = intervalsStart + 70) ---
+            const dataRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 70).load("values");
+            await context.sync();
+            
+            const ivals = dataRange.values[0];
+            let totalTimeMs = 0;
+            let totalKits = 0;
+            let sumWorkerTime = 0;
+            
+            const kitsPerLayer = parseFloat(document.getElementById("val-kpl").textContent) || 0;
+            
+            for (let i = 0; i < 10; i++) {
+                const wStart = parseFloat(ivals[i*7 + 1]);
+                const wStop = parseFloat(ivals[i*7 + 2]);
+                const rolls = parseFloat(ivals[i*7 + 3]) || 0;
+                const startStr = ivals[i*7 + 4] ? ivals[i*7 + 4].toString().replace(/^'/, "") : "";
+                const stopStr = ivals[i*7 + 5] ? ivals[i*7 + 5].toString().replace(/^'/, "") : "";
+                
+                if (startStr && rolls > 0) {
+                    if (i === 0 || rolls !== parseFloat(ivals[(i-1)*7 + 3])) {
+                        totalKits += (rolls * kitsPerLayer);
+                    }
+                }
+
+                if (startStr && stopStr) {
+                    const tStart = parseCustomDate(startStr);
+                    const tStop = parseCustomDate(stopStr);
+                    if (!isNaN(tStart) && !isNaN(tStop)) {
+                        const durationMs = tStop - tStart;
+                        if (durationMs > 0) {
+                            totalTimeMs += durationMs;
+                            const avgWorkers = (isNaN(wStart) || isNaN(wStop)) ? 0 : ((wStart + wStop) / 2);
+                            sumWorkerTime += (avgWorkers * durationMs);
+                        }
+                    }
+                }
+            }
+            
+            const totalAwariaMs = totalAwariaSecondsGlobal * 1000;
+            let netTimeMs = totalTimeMs - totalAwariaMs - totalBreakMs;
+            if (netTimeMs < 0) netTimeMs = 0;
+            
+            let avgWorkersFinal = 0;
+            if (totalTimeMs > 0) {
+                avgWorkersFinal = sumWorkerTime / totalTimeMs;
+            }
+            
+            const netTimeHms = secondsToHms(netTimeMs / 1000);
+            
+            // Write summary to explicitly mapped columns
+            if (colMap.netTime !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.netTime); c.values = [[safeStr(netTimeHms)]]; c.numberFormat = [["@"]]; }
+            if (colMap.loadingTime !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.loadingTime); c.values = [[safeStr(secondsToHms(totalLoadingSecondsGlobal))]]; c.numberFormat = [["@"]]; }
+            if (colMap.breakTime !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.breakTime); c.values = [[totalBreakMinutes > 0 ? safeStr(secondsToHms(totalBreakMinutes * 60)) : ""]]; c.numberFormat = [["@"]]; }
+            if (colMap.totalKits !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.totalKits); c.values = [[Math.round(totalKits)]]; c.numberFormat = [["0"]]; }
+            if (colMap.avgWorkers !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.avgWorkers); c.values = [[Number(avgWorkersFinal.toFixed(2))]]; c.numberFormat = [["0.00"]]; }
+            
+            // Zapisz KOD PRZERW
+            if (colMap.breakCodes !== undefined) {
+                let breakCodeParts = [];
+                document.querySelectorAll(".break-chk:checked").forEach(chk => {
+                    const parts = chk.id.replace("chk-b", "").split("-");
+                    if (parts.length === 2) {
+                        breakCodeParts.push(`Z${parts[0]}P${parts[1]}`);
+                    }
+                });
+                sheet.getCell(currentRowIndex, colMap.breakCodes).values = [[breakCodeParts.join(", ")]];
+            }
+            
+            // Generowanie nagłówków i obramowań dla wykorzystanych przedziałów
+            const validHeaderRow = (dataStartRowIndex > 0) ? dataStartRowIndex - 1 : 2;
+            if (colMap.intervalsStart !== undefined && currentIntervalIndex >= 0) {
+                const usedColsCount = (currentIntervalIndex + 1) * 7;
+                for (let i = 0; i <= currentIntervalIndex; i++) {
+                    const sCol = colMap.intervalsStart + 1 + (i * 7);
+                    sheet.getCell(validHeaderRow, sCol + 0).values = [[`Operator ${i+1}`]];
+                    sheet.getCell(validHeaderRow, sCol + 1).values = [[`Prac. Start ${i+1}`]];
+                    sheet.getCell(validHeaderRow, sCol + 2).values = [[`Prac. Koniec ${i+1}`]];
+                    sheet.getCell(validHeaderRow, sCol + 3).values = [[`Rolki ${i+1}`]];
+                    sheet.getCell(validHeaderRow, sCol + 4).values = [[`Start ${i+1}`]];
+                    sheet.getCell(validHeaderRow, sCol + 5).values = [[`Koniec ${i+1}`]];
+                    sheet.getCell(validHeaderRow, sCol + 6).values = [[`Ładowanie Mat. ${i+1}`]];
+                }
+                
+                const intervalHeaderRange = sheet.getRangeByIndexes(validHeaderRow, colMap.intervalsStart + 1, 1, usedColsCount);
+                intervalHeaderRange.format.borders.getItem('EdgeTop').style = 'Continuous';
+                intervalHeaderRange.format.borders.getItem('EdgeBottom').style = 'Continuous';
+                intervalHeaderRange.format.borders.getItem('EdgeLeft').style = 'Continuous';
+                intervalHeaderRange.format.borders.getItem('EdgeRight').style = 'Continuous';
+                intervalHeaderRange.format.borders.getItem('InsideVertical').style = 'Continuous';
+                intervalHeaderRange.format.borders.color = "#a3a3a3";
+                intervalHeaderRange.format.borders.weight = "Thin";
+                
+                const intervalDataRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, usedColsCount);
+                intervalDataRange.format.borders.getItem('EdgeTop').style = 'Continuous';
+                intervalDataRange.format.borders.getItem('EdgeBottom').style = 'Continuous';
+                intervalDataRange.format.borders.getItem('EdgeLeft').style = 'Continuous';
+                intervalDataRange.format.borders.getItem('EdgeRight').style = 'Continuous';
+                intervalDataRange.format.borders.getItem('InsideVertical').style = 'Continuous';
+                intervalDataRange.format.borders.color = "#a3a3a3";
+                intervalDataRange.format.borders.weight = "Thin";
+            }
+        
             if (colMap.chkBreak !== undefined) sheet.getCell(currentRowIndex, colMap.chkBreak).values = [[totalBreakMinutes > 0 ? safeStr(secondsToHms(totalBreakMinutes * 60)) : ""]];
             if (colMap.notes !== undefined) sheet.getCell(currentRowIndex, colMap.notes).values = [[incidentsText]];
             
             sheetProtect(sheet);
             await context.sync();
-            
-            resetUI();
-            setStatus(fullComplete ? "Zakończono produkt pomyślnie!" : "Przerwano produkt. Zapisano zmianę.");
-            await scanForUnfinished(context);
         });
+        
+        clearActiveSession();
+        resetUI();
+        setStatus(fullComplete ? "Zakończono produkt pomyślnie!" : "Przerwano produkt. Zapisano zmianę.");
+        
+        // Skanowanie w tle - natychmiast odblokowuje widok
+        setTimeout(() => {
+            Excel.run(async (bgCtx) => {
+                await scanForUnfinished(bgCtx);
+            }).catch(e => console.warn("Skanowanie po zapisie:", e));
+        }, 150);
+        
     } catch (error) {
         console.error(error);
-        setStatus("Błąd zapisu: " + error.message);
+        if (error.code === "InvalidOperationInCellEditMode") {
+            setStatus("Błąd: Excel jest w trybie edycji komórki! Kliknij w arkusz, wciśnij Enter lub Esc i kliknij Zapisz.");
+            alert("Excel jest w trybie edycji komórki!\n\nKliknij w dowolne miejsce w arkuszu i wciśnij klawisz ENTER lub ESC, a następnie kliknij Zapisz ponownie.");
+        } else {
+            setStatus("Błąd zapisu: " + error.message);
+            alert("Wystąpił problem z zapisem do Excela: " + error.message + "\n\nSprawdź czy arkusz nie jest zablokowany i spróbuj ponownie.");
+        }
+    } finally {
+        isSavingProcess = false;
+        if (btnFull) { btnFull.disabled = false; btnFull.innerText = origFullText || "Zakończ całkowicie Produkt"; }
+        if (btnPartial) { btnPartial.disabled = false; btnPartial.innerText = origPartialText || "Zakończ na dzisiaj"; }
     }
 }
 
 function resetUI() {
-    clearInterval(timerInterval);
-    clearInterval(awariaTimerInterval);
-    clearInterval(loadingTimerInterval);
-    stopAutoSave();
+    clearAllTimers();
+    clearActiveSession();
+    resumeUnexpected = false;
+    isStartingProcess = false;
+    intervalStartTimestamp = 0;
+    awariaStartTimestamp = 0;
+    loadingStartTimestamp = 0;
     
     isAwariaActive = false;
     isLoadingActive = false;
