@@ -1,4 +1,4 @@
-const ADDIN_VERSION = "1.3.6";
+const ADDIN_VERSION = "1.3.7";
 let noPassMode = false;
 let currentMode = "DEFAULT";
 let globalBreakSchedule = [];
@@ -550,10 +550,11 @@ function findOverlappingBreaks(intervals, schedule) {
         for (const intv of intervals) {
             const intStart = intv.start;
             const intEnd = intv.end;
-            if (!intStart || !intEnd || intEnd <= intStart) continue;
+            if (!intStart || !intEnd) continue;
+            const safeEnd = Math.max(intEnd, intStart + 1000);
 
             const startDate = new Date(intStart);
-            const endDate = new Date(intEnd);
+            const endDate = new Date(safeEnd);
             
             const startDay = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
             const endDay = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
@@ -568,16 +569,15 @@ function findOverlappingBreaks(intervals, schedule) {
                 let bEnd = bStart + (item.duration * 60 * 1000);
                 
                 const overlapStart = Math.max(intStart, bStart);
-                const overlapEnd = Math.min(intEnd, bEnd);
+                const overlapEnd = Math.min(safeEnd, bEnd);
                 if (overlapEnd > overlapStart) {
                     totalOverlapMs += (overlapEnd - overlapStart);
                 }
             }
         }
         
-        const overlapMinutes = totalOverlapMs / (60 * 1000);
-        const minThreshold = Math.min(5, item.duration * 0.5);
-        if (overlapMinutes >= minThreshold) {
+        // Wykrywamy przerwę gdy praca choć przez moment nachodzi na okno przerwy (działa także dla testów trwających kilka sekund)
+        if (totalOverlapMs > 0) {
             matchedCodes.add(item.code);
         }
     }
@@ -696,9 +696,8 @@ async function autoDetectBreaksForCurrentJob() {
     // 2. Dodaj bieżący aktywny przedział pracy
     if (intervalStartTimestamp > 0) {
         const nowMs = Date.now();
-        if (nowMs > intervalStartTimestamp) {
-            intervals.push({ start: intervalStartTimestamp, end: nowMs });
-        }
+        const endMs = Math.max(nowMs, intervalStartTimestamp + 1000);
+        intervals.push({ start: intervalStartTimestamp, end: endMs });
     }
 
     // 3. Wykryj nałożenie z przerwami z harmonogramu
