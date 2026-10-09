@@ -1,8 +1,9 @@
-const ADDIN_VERSION = "1.3.7";
+const ADDIN_VERSION = "1.3.8";
 let noPassMode = false;
 let currentMode = "DEFAULT";
 let globalBreakSchedule = [];
 let rawBreakScheduleText = "";
+let currentBreakOverlapInfo = {};
 
 function sheetUnprotect(sheet) {
     sheet.protection.unprotect("ShortP26");
@@ -153,6 +154,7 @@ function saveActiveSession() {
             
             loadedBreakMinutes: loadedBreakMinutes,
             checkedBreakCodes: Array.from(document.querySelectorAll(".break-chk:checked")).map(chk => chk.dataset.code || (chk.id ? (chk.id.replace("chk-b", "").startsWith("Z") ? chk.id.replace("chk-b", "") : "Z" + chk.id.replace("chk-b", "").replace("-", "P")) : "")).filter(Boolean),
+            overlapInfo: currentBreakOverlapInfo,
             theoreticalSeconds: theoreticalSeconds,
             
             notes: document.getElementById("in-running-notes").value,
@@ -276,7 +278,8 @@ async function tryRestoreActiveSession(context) {
         
         // Jeśli sesja była zatrzymana przyciskiem i czekała na wybór opcji zakończenia:
         if (session.isStopped) {
-            renderBreaksUI(session.checkedBreakCodes || [], []);
+            currentBreakOverlapInfo = session.overlapInfo || {};
+            renderBreaksUI(session.checkedBreakCodes || [], [], currentBreakOverlapInfo);
             document.getElementById("initial-card").classList.add("hidden");
             document.getElementById("data-card").classList.add("hidden");
             document.getElementById("machine-card").classList.add("hidden");
@@ -542,8 +545,9 @@ function parseBreakSchedule(text) {
 }
 
 function findOverlappingBreaks(intervals, schedule) {
-    if (!intervals || !intervals.length || !schedule || !schedule.length) return [];
+    if (!intervals || !intervals.length || !schedule || !schedule.length) return { detectedCodes: [], overlapInfo: {} };
     const matchedCodes = new Set();
+    const overlapInfo = {};
 
     for (const item of schedule) {
         let totalOverlapMs = 0;
@@ -576,41 +580,49 @@ function findOverlappingBreaks(intervals, schedule) {
             }
         }
         
-        // Wykrywamy przerwę gdy praca choć przez moment nachodzi na okno przerwy (działa także dla testów trwających kilka sekund)
+        // Wykrywamy przerwę gdy praca choć przez moment nachodzi na okno przerwy
         if (totalOverlapMs > 0) {
             matchedCodes.add(item.code);
+            const overlapSec = Math.round(totalOverlapMs / 1000);
+            overlapInfo[item.code] = {
+                overlapMs: totalOverlapMs,
+                overlapSeconds: overlapSec,
+                overlapMinutes: Math.round(overlapSec / 60),
+                fullDurationMinutes: item.duration
+            };
         }
     }
-    return Array.from(matchedCodes);
+    return { detectedCodes: Array.from(matchedCodes), overlapInfo: overlapInfo };
 }
 
-function renderBreaksUI(checkedCodes = [], autoDetectedCodes = []) {
+function renderBreaksUI(checkedCodes = [], autoDetectedCodes = [], overlapInfo = {}) {
     const container = document.getElementById("breaks-container");
     if (!container) return;
 
     const checkedSet = new Set((checkedCodes || []).map(c => c.toUpperCase()));
     const autoSet = new Set((autoDetectedCodes || []).map(c => c.toUpperCase()));
+    const ovInfo = overlapInfo || currentBreakOverlapInfo || {};
 
     if (!globalBreakSchedule || globalBreakSchedule.length === 0) {
         // Fallback: standardowy widok 3 zmian
         container.innerHTML = `
             <div style="font-weight: bold; font-size: 13px; margin-bottom: 6px;">Zmiana 1 (Przerwy):</div>
             <div style="display: flex; gap: 12px; font-size: 12px; margin-bottom: 10px;">
-                <label><input type="checkbox" id="chk-b1-5" class="break-chk" data-code="Z1P5" value="5" ${checkedSet.has("Z1P5") ? "checked" : ""}> 5 min</label>
-                <label><input type="checkbox" id="chk-b1-10" class="break-chk" data-code="Z1P10" value="10" ${checkedSet.has("Z1P10") ? "checked" : ""}> 10 min</label>
-                <label><input type="checkbox" id="chk-b1-20" class="break-chk" data-code="Z1P20" value="20" ${checkedSet.has("Z1P20") ? "checked" : ""}> 20 min</label>
+                <label><input type="checkbox" id="chk-b1-5" class="break-chk" data-code="Z1P5" data-overlap-seconds="300" value="5" ${checkedSet.has("Z1P5") ? "checked" : ""}> 5 min</label>
+                <label><input type="checkbox" id="chk-b1-10" class="break-chk" data-code="Z1P10" data-overlap-seconds="600" value="10" ${checkedSet.has("Z1P10") ? "checked" : ""}> 10 min</label>
+                <label><input type="checkbox" id="chk-b1-20" class="break-chk" data-code="Z1P20" data-overlap-seconds="1200" value="20" ${checkedSet.has("Z1P20") ? "checked" : ""}> 20 min</label>
             </div>
             <div style="font-weight: bold; font-size: 13px; margin-bottom: 6px;">Zmiana 2 (Przerwy):</div>
             <div style="display: flex; gap: 12px; font-size: 12px; margin-bottom: 10px;">
-                <label><input type="checkbox" id="chk-b2-5" class="break-chk" data-code="Z2P5" value="5" ${checkedSet.has("Z2P5") ? "checked" : ""}> 5 min</label>
-                <label><input type="checkbox" id="chk-b2-10" class="break-chk" data-code="Z2P10" value="10" ${checkedSet.has("Z2P10") ? "checked" : ""}> 10 min</label>
-                <label><input type="checkbox" id="chk-b2-20" class="break-chk" data-code="Z2P20" value="20" ${checkedSet.has("Z2P20") ? "checked" : ""}> 20 min</label>
+                <label><input type="checkbox" id="chk-b2-5" class="break-chk" data-code="Z2P5" data-overlap-seconds="300" value="5" ${checkedSet.has("Z2P5") ? "checked" : ""}> 5 min</label>
+                <label><input type="checkbox" id="chk-b2-10" class="break-chk" data-code="Z2P10" data-overlap-seconds="600" value="10" ${checkedSet.has("Z2P10") ? "checked" : ""}> 10 min</label>
+                <label><input type="checkbox" id="chk-b2-20" class="break-chk" data-code="Z2P20" data-overlap-seconds="1200" value="20" ${checkedSet.has("Z2P20") ? "checked" : ""}> 20 min</label>
             </div>
             <div style="font-weight: bold; font-size: 13px; margin-bottom: 6px;">Zmiana 3 (Przerwy):</div>
             <div style="display: flex; gap: 12px; font-size: 12px;">
-                <label><input type="checkbox" id="chk-b3-5" class="break-chk" data-code="Z3P5" value="5" ${checkedSet.has("Z3P5") ? "checked" : ""}> 5 min</label>
-                <label><input type="checkbox" id="chk-b3-10" class="break-chk" data-code="Z3P10" value="10" ${checkedSet.has("Z3P10") ? "checked" : ""}> 10 min</label>
-                <label><input type="checkbox" id="chk-b3-20" class="break-chk" data-code="Z3P20" value="20" ${checkedSet.has("Z3P20") ? "checked" : ""}> 20 min</label>
+                <label><input type="checkbox" id="chk-b3-5" class="break-chk" data-code="Z3P5" data-overlap-seconds="300" value="5" ${checkedSet.has("Z3P5") ? "checked" : ""}> 5 min</label>
+                <label><input type="checkbox" id="chk-b3-10" class="break-chk" data-code="Z3P10" data-overlap-seconds="600" value="10" ${checkedSet.has("Z3P10") ? "checked" : ""}> 10 min</label>
+                <label><input type="checkbox" id="chk-b3-20" class="break-chk" data-code="Z3P20" data-overlap-seconds="1200" value="20" ${checkedSet.has("Z3P20") ? "checked" : ""}> 20 min</label>
             </div>
         `;
         container.querySelectorAll(".break-chk").forEach(chk => {
@@ -633,13 +645,32 @@ function renderBreaksUI(checkedCodes = [], autoDetectedCodes = []) {
         for (const b of breaks) {
             const isChecked = checkedSet.has(b.code.toUpperCase());
             const isAuto = autoSet.has(b.code.toUpperCase());
+            const ov = ovInfo[b.code];
+
+            let effectiveSec = b.duration * 60;
+            let durationText = `${b.duration} min`;
+            
+            if (ov && ov.overlapSeconds > 0) {
+                effectiveSec = Math.min(ov.overlapSeconds, b.duration * 60);
+                if (effectiveSec < b.duration * 60) {
+                    const ovMin = Math.round(effectiveSec / 60);
+                    if (ovMin > 0) {
+                        durationText = `odlicza ${ovMin} z ${b.duration} min`;
+                    } else {
+                        durationText = `odlicza ${effectiveSec}s z ${b.duration} min`;
+                    }
+                } else {
+                    durationText = `${b.duration} min`;
+                }
+            }
+
             const badge = isAuto 
                 ? `<span style="background: #dcfce7; color: #166534; font-size: 9px; font-weight: 700; padding: 2px 5px; border-radius: 4px; margin-left: 5px; border: 1px solid #bbf7d0;">AUTO</span>` 
                 : "";
             html += `
                 <label style="display: inline-flex; align-items: center; background: #ffffff; padding: 5px 9px; border-radius: 6px; border: 1px solid #d1d5db; cursor: pointer; user-select: none;">
-                    <input type="checkbox" class="break-chk" id="chk-b${b.shift}-${b.duration}" data-code="${b.code}" value="${b.duration}" ${isChecked ? "checked" : ""} style="margin-right: 6px; cursor: pointer;">
-                    <span><b>${b.startStr}-${b.endStr}</b> (${b.duration} min)</span>${badge}
+                    <input type="checkbox" class="break-chk" id="chk-b${b.shift}-${b.duration}" data-code="${b.code}" data-overlap-seconds="${effectiveSec}" data-full-minutes="${b.duration}" value="${Math.max(1, Math.round(effectiveSec / 60))}" ${isChecked ? "checked" : ""} style="margin-right: 6px; cursor: pointer;">
+                    <span><b>${b.startStr}-${b.endStr}</b> (${durationText})</span>${badge}
                 </label>
             `;
         }
@@ -660,7 +691,7 @@ async function autoDetectBreaksForCurrentJob() {
             const c = chk.dataset.code || (chk.id ? chk.id.replace("chk-b", "").replace("-", "P") : "");
             if (c) currentChecked.push(c.startsWith("Z") ? c : `Z${c}`);
         });
-        renderBreaksUI(currentChecked, []);
+        renderBreaksUI(currentChecked, [], {});
         return;
     }
 
@@ -700,8 +731,9 @@ async function autoDetectBreaksForCurrentJob() {
         intervals.push({ start: intervalStartTimestamp, end: endMs });
     }
 
-    // 3. Wykryj nałożenie z przerwami z harmonogramu
-    const detectedCodes = findOverlappingBreaks(intervals, globalBreakSchedule);
+    // 3. Wykryj nałożenie z przerwami z harmonogramu wraz z dokładnym czasem pokrycia
+    const res = findOverlappingBreaks(intervals, globalBreakSchedule);
+    currentBreakOverlapInfo = res.overlapInfo || {};
 
     // 4. Połącz z już zaznaczonymi przerwami
     const existingChecked = new Set();
@@ -709,10 +741,10 @@ async function autoDetectBreaksForCurrentJob() {
         const c = chk.dataset.code || (chk.id ? chk.id.replace("chk-b", "").replace("-", "P") : "");
         if (c) existingChecked.add(c.startsWith("Z") ? c : `Z${c}`);
     });
-    detectedCodes.forEach(c => existingChecked.add(c));
+    res.detectedCodes.forEach(c => existingChecked.add(c));
 
-    // 5. Wyrenderuj zaktualizowane UI
-    renderBreaksUI(Array.from(existingChecked), detectedCodes);
+    // 5. Wyrenderuj zaktualizowane UI z proporcjonalnymi czasami pokrycia
+    renderBreaksUI(Array.from(existingChecked), res.detectedCodes, currentBreakOverlapInfo);
 }
 
 async function onWorksheetActivated(event) {
@@ -1246,8 +1278,6 @@ async function fetchRowData(forcedRowIndex, isCont) {
                     loadedBreakMinutes = 0; // Przerwy są śledzone przez checkboxy
                 }
             }
-            renderBreaksUI(loadedCodes, []);
-
             const existingNotes = vals[colMap.notes] ? vals[colMap.notes].toString() : "";
             document.getElementById("in-other-incidents").value = existingNotes;
             document.getElementById("in-running-notes").value = existingNotes;
@@ -1257,7 +1287,7 @@ async function fetchRowData(forcedRowIndex, isCont) {
             lastIntervalUnexpected = false;
             lastIntervalIndex = -1;
             unexpectedIntervalDuration = 0;
-            
+            const loadedIntervals = [];
             
             if (colMap.intervalsStart !== undefined) {
                 const intervalsStartStatus = vals[colMap.intervalsStart] ? vals[colMap.intervalsStart].toString().trim() : "";
@@ -1282,9 +1312,18 @@ async function fetchRowData(forcedRowIndex, isCont) {
                             const durationMs = tStop - tStart;
                             if (durationMs > 0) {
                                 previousTotalGrossSeconds += Math.floor(durationMs / 1000);
+                                loadedIntervals.push({ start: tStart, end: tStop });
                             }
                         }
                     }
+                }
+
+                if (globalBreakSchedule && globalBreakSchedule.length > 0 && loadedIntervals.length > 0) {
+                    const res = findOverlappingBreaks(loadedIntervals, globalBreakSchedule);
+                    currentBreakOverlapInfo = res.overlapInfo || {};
+                    renderBreaksUI(loadedCodes, res.detectedCodes, currentBreakOverlapInfo);
+                } else {
+                    renderBreaksUI(loadedCodes, [], currentBreakOverlapInfo || {});
                 }
                 
                 if (lastIntervalIndex >= 0) {
@@ -1962,12 +2001,19 @@ async function saveIncidents(fullComplete) {
     if (btnFull) { btnFull.disabled = true; btnFull.innerText = "⏳ Zapisywanie..."; }
     if (btnPartial) { btnPartial.disabled = true; btnPartial.innerText = "⏳ Zapisywanie..."; }
     
-    let newlyCheckedMinutes = 0;
+    let newlyCheckedSeconds = 0;
     document.querySelectorAll(".break-chk:checked").forEach(chk => {
-        newlyCheckedMinutes += parseInt(chk.value) || 0;
+        let sec = 0;
+        if (chk.dataset && chk.dataset.overlapSeconds !== undefined) {
+            sec = parseInt(chk.dataset.overlapSeconds, 10) || 0;
+        }
+        if (sec <= 0) {
+            sec = (parseInt(chk.value, 10) || 0) * 60;
+        }
+        newlyCheckedSeconds += sec;
     });
-    const totalBreakMinutes = (newlyCheckedMinutes > 0) ? newlyCheckedMinutes : loadedBreakMinutes;
-    const totalBreakMs = totalBreakMinutes * 60 * 1000;
+    const totalBreakSeconds = (newlyCheckedSeconds > 0) ? newlyCheckedSeconds : (loadedBreakMinutes * 60);
+    const totalBreakMs = totalBreakSeconds * 1000;
     const incidentsText = document.getElementById("in-other-incidents").value;
     
     try {
@@ -2042,7 +2088,7 @@ async function saveIncidents(fullComplete) {
             // Write summary to explicitly mapped columns
             if (colMap.netTime !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.netTime); c.values = [[safeStr(netTimeHms)]]; c.numberFormat = [["@"]]; }
             if (colMap.loadingTime !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.loadingTime); c.values = [[safeStr(secondsToHms(totalLoadingSecondsGlobal))]]; c.numberFormat = [["@"]]; }
-            if (colMap.breakTime !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.breakTime); c.values = [[totalBreakMinutes > 0 ? safeStr(secondsToHms(totalBreakMinutes * 60)) : ""]]; c.numberFormat = [["@"]]; }
+            if (colMap.breakTime !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.breakTime); c.values = [[totalBreakSeconds > 0 ? safeStr(secondsToHms(totalBreakSeconds)) : ""]]; c.numberFormat = [["@"]]; }
             if (colMap.totalKits !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.totalKits); c.values = [[Math.round(totalKits)]]; c.numberFormat = [["0"]]; }
             if (colMap.avgWorkers !== undefined) { const c = sheet.getCell(currentRowIndex, colMap.avgWorkers); c.values = [[Number(avgWorkersFinal.toFixed(2))]]; c.numberFormat = [["0.00"]]; }
             
@@ -2092,7 +2138,7 @@ async function saveIncidents(fullComplete) {
                 intervalDataRange.format.borders.weight = "Thin";
             }
         
-            if (colMap.chkBreak !== undefined) sheet.getCell(currentRowIndex, colMap.chkBreak).values = [[totalBreakMinutes > 0 ? safeStr(secondsToHms(totalBreakMinutes * 60)) : ""]];
+            if (colMap.chkBreak !== undefined) sheet.getCell(currentRowIndex, colMap.chkBreak).values = [[totalBreakSeconds > 0 ? safeStr(secondsToHms(totalBreakSeconds)) : ""]];
             if (colMap.notes !== undefined) sheet.getCell(currentRowIndex, colMap.notes).values = [[incidentsText]];
             
             sheetProtect(sheet);
