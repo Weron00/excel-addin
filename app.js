@@ -1,6 +1,8 @@
-const ADDIN_VERSION = "1.3.5";
+const ADDIN_VERSION = "1.3.6";
 let noPassMode = false;
 let currentMode = "DEFAULT";
+let globalBreakSchedule = [];
+let rawBreakScheduleText = "";
 
 function sheetUnprotect(sheet) {
     sheet.protection.unprotect("ShortP26");
@@ -150,6 +152,7 @@ function saveActiveSession() {
             currentIntervalLoadingSeconds: currentIntervalLoadingSeconds,
             
             loadedBreakMinutes: loadedBreakMinutes,
+            checkedBreakCodes: Array.from(document.querySelectorAll(".break-chk:checked")).map(chk => chk.dataset.code || (chk.id ? (chk.id.replace("chk-b", "").startsWith("Z") ? chk.id.replace("chk-b", "") : "Z" + chk.id.replace("chk-b", "").replace("-", "P")) : "")).filter(Boolean),
             theoreticalSeconds: theoreticalSeconds,
             
             notes: document.getElementById("in-running-notes").value,
@@ -273,6 +276,7 @@ async function tryRestoreActiveSession(context) {
         
         // Jeśli sesja była zatrzymana przyciskiem i czekała na wybór opcji zakończenia:
         if (session.isStopped) {
+            renderBreaksUI(session.checkedBreakCodes || [], []);
             document.getElementById("initial-card").classList.add("hidden");
             document.getElementById("data-card").classList.add("hidden");
             document.getElementById("machine-card").classList.add("hidden");
@@ -489,6 +493,229 @@ function hmsToSeconds(hms) {
     return (+parts[0]) * 3600 + (+parts[1]) * 60 + (+parts[2]);
 }
 
+function parseBreakSchedule(text) {
+    if (!text || typeof text !== "string") return [];
+    const lines = text.split(/\r?\n|;/);
+    const schedule = [];
+    const seenCodes = {};
+
+    for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        const shiftMatch = line.match(/^(\d+)[\.\:\)]?\s*(.*)$/);
+        let shiftNum = 1;
+        let content = line;
+        if (shiftMatch) {
+            shiftNum = parseInt(shiftMatch[1], 10);
+            content = shiftMatch[2];
+        }
+        const timeRegex = /(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})/g;
+        let match;
+        while ((match = timeRegex.exec(content)) !== null) {
+            const startParts = match[1].split(':').map(Number);
+            const endParts = match[2].split(':').map(Number);
+            const startMin = startParts[0] * 60 + startParts[1];
+            const endMin = endParts[0] * 60 + endParts[1];
+            let dur = endMin - startMin;
+            if (dur < 0) dur += 1440; // Przejście przez północ
+            let code = `Z${shiftNum}P${dur}`;
+            if (seenCodes[code]) {
+                seenCodes[code]++;
+                code = `${code}_${seenCodes[code]}`;
+            } else {
+                seenCodes[code] = 1;
+            }
+            schedule.push({
+                shift: shiftNum,
+                startStr: `${String(startParts[0]).padStart(2, '0')}:${String(startParts[1]).padStart(2, '0')}`,
+                endStr: `${String(endParts[0]).padStart(2, '0')}:${String(endParts[1]).padStart(2, '0')}`,
+                startH: startParts[0],
+                startM: startParts[1],
+                endH: endParts[0],
+                endM: endParts[1],
+                duration: dur,
+                code: code
+            });
+        }
+    }
+    return schedule;
+}
+
+function findOverlappingBreaks(intervals, schedule) {
+    if (!intervals || !intervals.length || !schedule || !schedule.length) return [];
+    const matchedCodes = new Set();
+
+    for (const item of schedule) {
+        let totalOverlapMs = 0;
+        for (const intv of intervals) {
+            const intStart = intv.start;
+            const intEnd = intv.end;
+            if (!intStart || !intEnd || intEnd <= intStart) continue;
+
+            const startDate = new Date(intStart);
+            const endDate = new Date(intEnd);
+            
+            const startDay = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+            const endDay = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+            
+            // Sprawdzamy kalendarzowe dni z buforem 1 dnia
+            for (let d = new Date(startDay.getTime() - 86400000); d.getTime() <= endDay.getTime() + 86400000; d.setDate(d.getDate() + 1)) {
+                const year = d.getFullYear();
+                const month = d.getMonth();
+                const day = d.getDate();
+                
+                let bStart = new Date(year, month, day, item.startH, item.startM, 0, 0).getTime();
+                let bEnd = bStart + (item.duration * 60 * 1000);
+                
+                const overlapStart = Math.max(intStart, bStart);
+                const overlapEnd = Math.min(intEnd, bEnd);
+                if (overlapEnd > overlapStart) {
+                    totalOverlapMs += (overlapEnd - overlapStart);
+                }
+            }
+        }
+        
+        const overlapMinutes = totalOverlapMs / (60 * 1000);
+        const minThreshold = Math.min(5, item.duration * 0.5);
+        if (overlapMinutes >= minThreshold) {
+            matchedCodes.add(item.code);
+        }
+    }
+    return Array.from(matchedCodes);
+}
+
+function renderBreaksUI(checkedCodes = [], autoDetectedCodes = []) {
+    const container = document.getElementById("breaks-container");
+    if (!container) return;
+
+    const checkedSet = new Set((checkedCodes || []).map(c => c.toUpperCase()));
+    const autoSet = new Set((autoDetectedCodes || []).map(c => c.toUpperCase()));
+
+    if (!globalBreakSchedule || globalBreakSchedule.length === 0) {
+        // Fallback: standardowy widok 3 zmian
+        container.innerHTML = `
+            <div style="font-weight: bold; font-size: 13px; margin-bottom: 6px;">Zmiana 1 (Przerwy):</div>
+            <div style="display: flex; gap: 12px; font-size: 12px; margin-bottom: 10px;">
+                <label><input type="checkbox" id="chk-b1-5" class="break-chk" data-code="Z1P5" value="5" ${checkedSet.has("Z1P5") ? "checked" : ""}> 5 min</label>
+                <label><input type="checkbox" id="chk-b1-10" class="break-chk" data-code="Z1P10" value="10" ${checkedSet.has("Z1P10") ? "checked" : ""}> 10 min</label>
+                <label><input type="checkbox" id="chk-b1-20" class="break-chk" data-code="Z1P20" value="20" ${checkedSet.has("Z1P20") ? "checked" : ""}> 20 min</label>
+            </div>
+            <div style="font-weight: bold; font-size: 13px; margin-bottom: 6px;">Zmiana 2 (Przerwy):</div>
+            <div style="display: flex; gap: 12px; font-size: 12px; margin-bottom: 10px;">
+                <label><input type="checkbox" id="chk-b2-5" class="break-chk" data-code="Z2P5" value="5" ${checkedSet.has("Z2P5") ? "checked" : ""}> 5 min</label>
+                <label><input type="checkbox" id="chk-b2-10" class="break-chk" data-code="Z2P10" value="10" ${checkedSet.has("Z2P10") ? "checked" : ""}> 10 min</label>
+                <label><input type="checkbox" id="chk-b2-20" class="break-chk" data-code="Z2P20" value="20" ${checkedSet.has("Z2P20") ? "checked" : ""}> 20 min</label>
+            </div>
+            <div style="font-weight: bold; font-size: 13px; margin-bottom: 6px;">Zmiana 3 (Przerwy):</div>
+            <div style="display: flex; gap: 12px; font-size: 12px;">
+                <label><input type="checkbox" id="chk-b3-5" class="break-chk" data-code="Z3P5" value="5" ${checkedSet.has("Z3P5") ? "checked" : ""}> 5 min</label>
+                <label><input type="checkbox" id="chk-b3-10" class="break-chk" data-code="Z3P10" value="10" ${checkedSet.has("Z3P10") ? "checked" : ""}> 10 min</label>
+                <label><input type="checkbox" id="chk-b3-20" class="break-chk" data-code="Z3P20" value="20" ${checkedSet.has("Z3P20") ? "checked" : ""}> 20 min</label>
+            </div>
+        `;
+        container.querySelectorAll(".break-chk").forEach(chk => {
+            chk.addEventListener("change", saveActiveSession);
+        });
+        return;
+    }
+
+    const shiftsMap = new Map();
+    for (const b of globalBreakSchedule) {
+        if (!shiftsMap.has(b.shift)) shiftsMap.set(b.shift, []);
+        shiftsMap.get(b.shift).push(b);
+    }
+
+    let html = "";
+    let isFirst = true;
+    for (const [shift, breaks] of shiftsMap.entries()) {
+        html += `<div style="font-weight: bold; font-size: 13px; margin-top: ${isFirst ? '0' : '10px'}; margin-bottom: 6px;">Zmiana ${shift} (Harmonogram):</div>`;
+        html += `<div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px;">`;
+        for (const b of breaks) {
+            const isChecked = checkedSet.has(b.code.toUpperCase());
+            const isAuto = autoSet.has(b.code.toUpperCase());
+            const badge = isAuto 
+                ? `<span style="background: #dcfce7; color: #166534; font-size: 9px; font-weight: 700; padding: 2px 5px; border-radius: 4px; margin-left: 5px; border: 1px solid #bbf7d0;">AUTO</span>` 
+                : "";
+            html += `
+                <label style="display: inline-flex; align-items: center; background: #ffffff; padding: 5px 9px; border-radius: 6px; border: 1px solid #d1d5db; cursor: pointer; user-select: none;">
+                    <input type="checkbox" class="break-chk" id="chk-b${b.shift}-${b.duration}" data-code="${b.code}" value="${b.duration}" ${isChecked ? "checked" : ""} style="margin-right: 6px; cursor: pointer;">
+                    <span><b>${b.startStr}-${b.endStr}</b> (${b.duration} min)</span>${badge}
+                </label>
+            `;
+        }
+        html += `</div>`;
+        isFirst = false;
+    }
+    container.innerHTML = html;
+
+    container.querySelectorAll(".break-chk").forEach(chk => {
+        chk.addEventListener("change", saveActiveSession);
+    });
+}
+
+async function autoDetectBreaksForCurrentJob() {
+    if (!globalBreakSchedule || globalBreakSchedule.length === 0) {
+        const currentChecked = [];
+        document.querySelectorAll(".break-chk:checked").forEach(chk => {
+            const c = chk.dataset.code || (chk.id ? chk.id.replace("chk-b", "").replace("-", "P") : "");
+            if (c) currentChecked.push(c.startsWith("Z") ? c : `Z${c}`);
+        });
+        renderBreaksUI(currentChecked, []);
+        return;
+    }
+
+    const intervals = [];
+    
+    // 1. Wczytaj wcześniejsze przedziały zapisanego wiersza z Excela
+    if (colMap.intervalsStart !== undefined && currentRowIndex > 0) {
+        try {
+            await Excel.run(async (context) => {
+                const sheet = context.workbook.worksheets.getItem(activeSheetName);
+                const dataRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 70).load("values");
+                await context.sync();
+                const vals = dataRange.values[0];
+                for (let i = 0; i < 10; i++) {
+                    const startIdx = (i * 7) + 4;
+                    const stopIdx = (i * 7) + 5;
+                    const sVal = vals[startIdx] ? vals[startIdx].toString().replace(/^'/, "") : "";
+                    const eVal = vals[stopIdx] ? vals[stopIdx].toString().replace(/^'/, "") : "";
+                    if (sVal && eVal) {
+                        const tStart = parseCustomDate(sVal);
+                        const tStop = parseCustomDate(eVal);
+                        if (!isNaN(tStart) && !isNaN(tStop) && tStop > tStart) {
+                            intervals.push({ start: tStart, end: tStop });
+                        }
+                    }
+                }
+            });
+        } catch (err) {
+            console.warn("Błąd odczytu przedziałów z Excela do detekcji przerw:", err);
+        }
+    }
+
+    // 2. Dodaj bieżący aktywny przedział pracy
+    if (intervalStartTimestamp > 0) {
+        const nowMs = Date.now();
+        if (nowMs > intervalStartTimestamp) {
+            intervals.push({ start: intervalStartTimestamp, end: nowMs });
+        }
+    }
+
+    // 3. Wykryj nałożenie z przerwami z harmonogramu
+    const detectedCodes = findOverlappingBreaks(intervals, globalBreakSchedule);
+
+    // 4. Połącz z już zaznaczonymi przerwami
+    const existingChecked = new Set();
+    document.querySelectorAll(".break-chk:checked").forEach(chk => {
+        const c = chk.dataset.code || (chk.id ? chk.id.replace("chk-b", "").replace("-", "P") : "");
+        if (c) existingChecked.add(c.startsWith("Z") ? c : `Z${c}`);
+    });
+    detectedCodes.forEach(c => existingChecked.add(c));
+
+    // 5. Wyrenderuj zaktualizowane UI
+    renderBreaksUI(Array.from(existingChecked), detectedCodes);
+}
+
 async function onWorksheetActivated(event) {
     if (timerInterval !== null || localStorage.getItem(ACTIVE_SESSION_KEY)) return;
     
@@ -652,8 +879,9 @@ async function initializeColumnMap(context) {
         document.getElementById("btn-fetch").style.display = "inline-block";
     }
 
-    // Odczytaj tryb NoPass z pierwszych 10 wierszy kolumny START DANYCH
+    // Odczytaj tryb NoPass oraz harmonogram przerw z kolumny START DANYCH
     let foundNoPass = false;
+    let noPassRow = -1;
     if (dataStartColIndex !== -1) {
         for (let r = 0; r < 10; r++) {
             const val = range.values[r] && range.values[r][dataStartColIndex] 
@@ -661,11 +889,42 @@ async function initializeColumnMap(context) {
                 : "";
             if (val === "NOPASS") {
                 foundNoPass = true;
+                noPassRow = r;
                 break;
             }
         }
     }
     noPassMode = foundNoPass;
+
+    // Harmonogram przerw znajduje się w komórce bezpośrednio pod NoPass (np. BX2 pod BX1)
+    let scheduleText = "";
+    if (dataStartColIndex !== -1) {
+        if (noPassRow !== -1 && noPassRow + 1 < 10) {
+            const cellVal = range.values[noPassRow + 1][dataStartColIndex];
+            if (cellVal) scheduleText = cellVal.toString().trim();
+        }
+        // Fallback: jeśli pod NoPass nic nie ma lub NoPass nie został znaleziony, sprawdź BX2 (r=1) lub przeszukaj wiersze 0-9
+        if (!scheduleText && range.values[1] && range.values[1][dataStartColIndex]) {
+            const valBX2 = range.values[1][dataStartColIndex].toString().trim();
+            if (/\d{1,2}:\d{2}/.test(valBX2)) {
+                scheduleText = valBX2;
+            }
+        }
+        if (!scheduleText) {
+            for (let r = 0; r < 10; r++) {
+                const cVal = range.values[r] && range.values[r][dataStartColIndex]
+                    ? range.values[r][dataStartColIndex].toString().trim()
+                    : "";
+                if (cVal && /\d{1,2}:\d{2}\s*[-–—]\s*\d{1,2}:\d{2}/.test(cVal)) {
+                    scheduleText = cVal;
+                    break;
+                }
+            }
+        }
+    }
+
+    rawBreakScheduleText = scheduleText;
+    globalBreakSchedule = parseBreakSchedule(scheduleText);
 
     // Mapuj kolumny ze stałych offsetów od START DANYCH
     colMap.machine = dataStartColIndex + 1;
@@ -979,24 +1238,16 @@ async function fetchRowData(forcedRowIndex, isCont) {
             } else {
                 loadedBreakMinutes = 0;
             }
-            document.querySelectorAll(".break-chk").forEach(chk => chk.checked = false);
-
-            // Odczytaj KOD PRZERW i zaznacz odpowiednie checkboxy
+            // Odczytaj KOD PRZERW i wyrenderuj checkboxy
+            let loadedCodes = [];
             if (colMap.breakCodes !== undefined && vals[colMap.breakCodes]) {
                 const codesStr = vals[colMap.breakCodes].toString().trim();
                 if (codesStr) {
-                    const codes = codesStr.split(",").map(s => s.trim().toUpperCase());
-                    codes.forEach(code => {
-                        const match = code.match(/^Z(\d+)P(\d+)$/);
-                        if (match) {
-                            const chkId = `chk-b${match[1]}-${match[2]}`;
-                            const chk = document.getElementById(chkId);
-                            if (chk) chk.checked = true;
-                        }
-                    });
+                    loadedCodes = codesStr.split(",").map(s => s.trim().toUpperCase());
                     loadedBreakMinutes = 0; // Przerwy są śledzone przez checkboxy
                 }
             }
+            renderBreaksUI(loadedCodes, []);
 
             const existingNotes = vals[colMap.notes] ? vals[colMap.notes].toString() : "";
             document.getElementById("in-other-incidents").value = existingNotes;
@@ -1670,7 +1921,7 @@ async function confirmChangeRolls() {
     }
 }
 
-function handleStop() {
+async function handleStop() {
     if (isAwariaActive) {
         alert("Najpierw wyłącz Stan Awarii!");
         return;
@@ -1685,6 +1936,12 @@ function handleStop() {
     
     document.getElementById("in-other-incidents").value = document.getElementById("in-running-notes").value;
     
+    try {
+        await autoDetectBreaksForCurrentJob();
+    } catch (e) {
+        console.error("Błąd podczas automatycznego wykrywania przerw:", e);
+    }
+
     document.getElementById("running-card").classList.add("hidden");
     document.getElementById("incidents-card").classList.add("hidden");
     document.getElementById("main-header").classList.remove("hidden");
@@ -1710,7 +1967,7 @@ async function saveIncidents(fullComplete) {
     document.querySelectorAll(".break-chk:checked").forEach(chk => {
         newlyCheckedMinutes += parseInt(chk.value) || 0;
     });
-    const totalBreakMinutes = loadedBreakMinutes + newlyCheckedMinutes;
+    const totalBreakMinutes = (newlyCheckedMinutes > 0) ? newlyCheckedMinutes : loadedBreakMinutes;
     const totalBreakMs = totalBreakMinutes * 60 * 1000;
     const incidentsText = document.getElementById("in-other-incidents").value;
     
@@ -1794,9 +2051,9 @@ async function saveIncidents(fullComplete) {
             if (colMap.breakCodes !== undefined) {
                 let breakCodeParts = [];
                 document.querySelectorAll(".break-chk:checked").forEach(chk => {
-                    const parts = chk.id.replace("chk-b", "").split("-");
-                    if (parts.length === 2) {
-                        breakCodeParts.push(`Z${parts[0]}P${parts[1]}`);
+                    const code = chk.dataset.code || (chk.id ? (chk.id.replace("chk-b", "").startsWith("Z") ? chk.id.replace("chk-b", "") : "Z" + chk.id.replace("chk-b", "").replace("-", "P")) : "");
+                    if (code) {
+                        breakCodeParts.push(code.startsWith("Z") ? code : `Z${code}`);
                     }
                 });
                 sheet.getCell(currentRowIndex, colMap.breakCodes).values = [[breakCodeParts.join(", ")]];
@@ -1896,6 +2153,7 @@ function resetUI() {
     document.getElementById("incidents-card").classList.add("hidden");
     document.getElementById("machine-warning-card").classList.add("hidden");
     document.getElementById("unexpected-card").classList.add("hidden");
+    document.querySelectorAll(".break-chk").forEach(chk => chk.checked = false);
     document.getElementById("initial-card").classList.remove("hidden");
 }
 
