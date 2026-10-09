@@ -1,4 +1,4 @@
-const ADDIN_VERSION = "1.3.8";
+const ADDIN_VERSION = "1.3.9";
 let noPassMode = false;
 let currentMode = "DEFAULT";
 let globalBreakSchedule = [];
@@ -1102,25 +1102,27 @@ async function scanForUnfinished(context) {
     const sheet = context.workbook.worksheets.getActiveWorksheet();
     if (dataStartRowIndex < 0) dataStartRowIndex = 3;
     
-    // Optymalizacja: ładowanie tylko niezbędnych kolumn zamiast 150 kolumn x 2000 wierszy
+    // Optymalizacja: ładowanie tylko niezbędnych kolumn zamiast całego arkusza
     const maxColNeeded = Math.max(
         (colMap.startGlobal !== undefined ? colMap.startGlobal : 26),
         (colMap.endGlobal !== undefined ? colMap.endGlobal : 27),
         (colMap.item !== undefined ? colMap.item : 3),
-        (colMap.machine !== undefined ? colMap.machine : 24)
+        (colMap.machine !== undefined ? colMap.machine : 24),
+        (colMap.operator !== undefined ? colMap.operator : 0)
     );
     const colsToLoad = Math.max(maxColNeeded + 1, 30);
     
-    let rowsToLoad = 500;
+    // Zwiększone okno skanowania: min. 3000 wierszy, do 10000 wierszy dla poszatkowanych sekwencji
+    let rowsToLoad = 3000;
     try {
         const used = sheet.getUsedRangeOrNullObject(true);
         used.load("rowCount");
         await context.sync();
         if (!used.isNullObject && used.rowCount > dataStartRowIndex) {
-            rowsToLoad = Math.min(Math.max(used.rowCount - dataStartRowIndex + 5, 20), 1000);
+            rowsToLoad = Math.min(Math.max(used.rowCount - dataStartRowIndex + 50, 3000), 10000);
         }
     } catch (e) {
-        rowsToLoad = 500;
+        rowsToLoad = 3000;
     }
     
     const range = sheet.getRangeByIndexes(dataStartRowIndex, 0, rowsToLoad, colsToLoad).load("values");
@@ -1133,14 +1135,14 @@ async function scanForUnfinished(context) {
     
     for (let i = 0; i < range.values.length; i++) {
         const row = range.values[i];
-        if (!row || (!row[colMap.startGlobal] && !row[colMap.item])) continue;
+        if (!row) continue;
         
-        const valAA = row[colMap.startGlobal] ? row[colMap.startGlobal].toString().trim() : "";
-        const valAB = row[colMap.endGlobal] ? row[colMap.endGlobal].toString().trim() : "";
+        const valAA = (colMap.startGlobal !== undefined && row[colMap.startGlobal]) ? row[colMap.startGlobal].toString().trim() : "";
+        const valAB = (colMap.endGlobal !== undefined && row[colMap.endGlobal]) ? row[colMap.endGlobal].toString().trim() : "";
         
         if (valAA !== "" && valAB === "") {
             foundAny = true;
-            const itemValue = (colMap.item !== undefined && row[colMap.item]) ? row[colMap.item].toString() : "Brak Itemu";
+            const itemValue = (colMap.item !== undefined && row[colMap.item]) ? row[colMap.item].toString().trim() : "Brak Itemu";
             const machineVal = (colMap.machine !== undefined && row[colMap.machine]) ? row[colMap.machine].toString().trim() : "";
             if (machineVal !== "") {
                 window.unfinishedMachines[machineVal] = {
@@ -1148,9 +1150,11 @@ async function scanForUnfinished(context) {
                     item: itemValue
                 };
             }
+            const opVal = (colMap.operator !== undefined && row[colMap.operator]) ? row[colMap.operator].toString().trim() : "";
+            const opStr = opVal ? ` | ${opVal}` : "";
             const btn = document.createElement("button");
             btn.className = "unfinished-item";
-            btn.innerText = `Wiersz ${dataStartRowIndex + i + 1} | Item: ${itemValue}`;
+            btn.innerText = `Wiersz ${dataStartRowIndex + i + 1} | Item: ${itemValue}${opStr}`;
             btn.onclick = () => fetchRowData(dataStartRowIndex + i, true);
             listContainer.appendChild(btn);
         }
