@@ -1,9 +1,28 @@
-const ADDIN_VERSION = "1.3.9";
+const ADDIN_VERSION = "1.4.1";
 let noPassMode = false;
 let currentMode = "DEFAULT";
 let globalBreakSchedule = [];
 let rawBreakScheduleText = "";
 let currentBreakOverlapInfo = {};
+
+const TRACKED_ROW_BINDING_ID = "nakladka_tracked_row_cell";
+let activeRowSignature = null;
+let adminRowSignature = null;
+let sheetsWithChangeListener = new Set();
+let internalWriteDepth = 0;
+let lastInternalWriteTime = 0;
+let structureSyncTimeout = null;
+let isSyncingStructure = false;
+
+function beginInternalWrite() {
+    internalWriteDepth++;
+    lastInternalWriteTime = Date.now();
+}
+
+function endInternalWrite() {
+    internalWriteDepth = Math.max(0, internalWriteDepth - 1);
+    lastInternalWriteTime = Date.now();
+}
 
 function sheetUnprotect(sheet) {
     sheet.protection.unprotect("ShortP26");
@@ -28,9 +47,9 @@ Office.onReady((info) => {
     document.getElementById("btn-save-partial").onclick = () => saveIncidents(false);
     document.getElementById("btn-save-full").onclick = () => saveIncidents(true);
     
-    // Nawigacja wierszami
-    document.getElementById("btn-prev-row").onclick = () => { if (currentRowIndex > 1) fetchRowData(currentRowIndex - 1, isContinuing); };
-    document.getElementById("btn-next-row").onclick = () => fetchRowData(currentRowIndex + 1, isContinuing);
+    // Nawigacja wierszami (z uwzględnieniem ewentualnego przesunięcia wiersza)
+    document.getElementById("btn-prev-row").onclick = () => navigateRelativeRow(-1);
+    document.getElementById("btn-next-row").onclick = () => navigateRelativeRow(1);
     
     // Zmiana rolek w trakcie
     document.getElementById("btn-change-rolls").onclick = () => {
@@ -89,6 +108,46 @@ Office.onReady((info) => {
     }
 });
 
+async function navigateRelativeRow(delta) {
+    if (currentRowIndex < 0) return;
+    try {
+        await Excel.run(async (context) => {
+            const sheet = activeSheetName
+                ? context.workbook.worksheets.getItem(activeSheetName)
+                : context.workbook.worksheets.getActiveWorksheet();
+            if (activeRowSignature) {
+                try {
+                    await ensureRowAndColumnsSynced(context, sheet);
+                } catch (e) {
+                    console.warn("Błąd synchronizacji przed nawigacją wiersza:", e);
+                }
+            }
+        });
+    } catch (e) {
+        console.warn(e);
+    }
+    const targetRow = currentRowIndex + delta;
+    if (targetRow >= Math.max(1, dataStartRowIndex)) {
+        fetchRowData(targetRow, isContinuing);
+    }
+}
+
+function updateRowIndicatorsUI(rowIdx = currentRowIndex) {
+    const humanRow = (typeof rowIdx === "number" && rowIdx >= 0) ? (rowIdx + 1) : "-";
+    const dataHeaderEl = document.getElementById("data-header");
+    if (dataHeaderEl) {
+        dataHeaderEl.innerText = humanRow !== "-" ? `Dane z wiersza ${humanRow}` : "Dane z wiersza";
+    }
+    const runningBadgeEl = document.getElementById("running-row-badge");
+    if (runningBadgeEl) {
+        runningBadgeEl.innerText = `Wiersz: ${humanRow}`;
+    }
+    const incidentsBadgeEl = document.getElementById("incidents-row-badge");
+    if (incidentsBadgeEl) {
+        incidentsBadgeEl.innerText = `Wiersz: ${humanRow}`;
+    }
+}
+
 function handleVisibilityChange() {
     if (document.visibilityState === "visible") {
         if (intervalStartTimestamp > 0 && timerInterval !== null) {
@@ -111,6 +170,7 @@ function handleVisibilityChange() {
             
             updateTimerDisplay();
             saveActiveSession();
+            scheduleStructureSync("VisibilityWakeup");
         }
     } else {
         saveActiveSession();
@@ -162,6 +222,7 @@ function saveActiveSession() {
             rev: document.getElementById("val-rev").innerText,
             product: document.getElementById("val-product").innerText,
             kpl: document.getElementById("val-kpl").innerText,
+            activeRowSignature: activeRowSignature,
             
             isStopped: !document.getElementById("incidents-card").classList.contains("hidden"),
             lastHeartbeat: Date.now()
@@ -237,7 +298,9 @@ async function tryRestoreActiveSession(context) {
         currentOperatorGlobalString = session.currentOperatorGlobalString || "";
         
         currentIntervalIndex = session.currentIntervalIndex !== undefined ? session.currentIntervalIndex : 0;
-        currentIntervalStartCol = session.currentIntervalStartCol !== undefined ? session.currentIntervalStartCol : -1;
+        currentIntervalStartCol = (colMap.intervalsStart !== undefined && currentIntervalIndex >= 0)
+            ? (colMap.intervalsStart + 1 + (currentIntervalIndex * 7))
+            : (session.currentIntervalStartCol !== undefined ? session.currentIntervalStartCol : -1);
         intervalStartTimestamp = session.intervalStartTime || Date.now();
         previousTotalGrossSeconds = session.previousTotalGrossSeconds || 0;
         unexpectedIntervalDuration = session.unexpectedIntervalDuration || 0;
@@ -248,6 +311,32 @@ async function tryRestoreActiveSession(context) {
         
         loadedBreakMinutes = session.loadedBreakMinutes || 0;
         theoreticalSeconds = session.theoreticalSeconds || 0;
+        
+        activeRowSignature = session.activeRowSignature || {
+            sheetName: session.activeSheetName,
+            originalRowIndex: session.currentRowIndex,
+            item: normCell(session.item),
+            rev: normCell(session.rev),
+            product: normCell(session.product),
+            nesting: "",
+            startGlobalRaw: "",
+            startGlobalMs: NaN,
+            endGlobalRaw: "",
+            machine: normCell(session.machine),
+            operatorGlobal: normCell(session.currentOperatorGlobalString || session.operator),
+            workersGlobal: normCell(session.currentWorkerGlobalString),
+            activeIntervalIndex: currentIntervalIndex,
+            activeIntervalStartRaw: "",
+            activeIntervalStartMs: intervalStartTimestamp,
+            isRunningJob: true
+        };
+        
+        // Zweryfikuj czy podczas uśpienia/odświeżenia nie zmienił się układ wierszy lub kolumn
+        try {
+            await ensureRowAndColumnsSynced(context, targetSheet);
+        } catch (syncErr) {
+            console.warn("Ostrzeżenie podczas weryfikacji wiersza po wznowieniu sesji:", syncErr);
+        }
         
         document.getElementById("in-operator").value = session.operator || "";
         document.getElementById("in-workers").value = currentWorkersCount;
@@ -266,6 +355,7 @@ async function tryRestoreActiveSession(context) {
         const rTxt = document.getElementById("val-rev").innerText;
         const pTxt = document.getElementById("val-product").innerText;
         document.getElementById("running-info").innerHTML = `Item: ${iTxt}, Rev: ${rTxt}<br>Prod: ${pTxt}`;
+        updateRowIndicatorsUI(currentRowIndex);
         
         if (session.notes) {
             document.getElementById("in-running-notes").value = session.notes;
@@ -289,7 +379,7 @@ async function tryRestoreActiveSession(context) {
             document.getElementById("main-header").classList.remove("hidden");
             document.getElementById("incidents-card").classList.remove("hidden");
             document.body.classList.remove("timer-active");
-            setStatus("Czas zatrzymany. Wybierz opcję zakończenia.");
+            setStatus(`Czas zatrzymany (Wiersz ${currentRowIndex + 1}). Wybierz opcję zakończenia.`);
             return true;
         }
         
@@ -355,8 +445,9 @@ async function tryRestoreActiveSession(context) {
         
         startTimer();
         startAutoSave();
+        saveActiveSession();
         
-        setStatus("Wznowiono aktywne zadanie po odświeżeniu strony.");
+        setStatus(`Wznowiono aktywne zadanie (Wiersz ${currentRowIndex + 1}).`);
         return true;
     } catch (err) {
         console.error("Błąd przywracania sesji:", err);
@@ -408,6 +499,8 @@ let lastIntervalUnexpected = false;
 let lastIntervalIndex = -1;
 let unexpectedIntervalDuration = 0;
 let resumeUnexpected = false;
+let isManualStart = false;
+let manualStartTimestamp = 0;
 
 // Pracownicy i operatorzy
 let currentWorkersCount = 4;
@@ -456,9 +549,27 @@ function getExcelDateNumber(d = new Date()) {
 function parseCustomDate(val) {
     if (val === undefined || val === null || val === "") return NaN;
     const str = val.toString().trim().replace(/^'/, "");
-    
-    if (!isNaN(parseFloat(str)) && !str.includes("-") && !str.includes(":")) {
+    if (!str) return NaN;
+
+    // 1. Czysta liczba (format seryjny daty/czasu Excela)
+    if (/^-?\d+(\.\d+)?$/.test(str)) {
         const num = parseFloat(str);
+        if (isNaN(num) || num <= 0) return NaN;
+
+        // Jeśli w Excelu wpisano ręcznie samą godzinę (np. "08:30"), Excel przechowuje ją jako ułamek doby (0 < num < 1)
+        if (num < 1) {
+            const totalSeconds = Math.round(num * 86400);
+            const hours = Math.floor(totalSeconds / 3600) % 24;
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            const now = new Date();
+            let candidate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, seconds);
+            if (candidate.getTime() > now.getTime() + 5 * 60 * 1000) {
+                candidate.setDate(candidate.getDate() - 1);
+            }
+            return candidate.getTime();
+        }
+
         const excelEpochUtc = Date.UTC(1899, 11, 30, 0, 0, 0);
         const localAsUtc = excelEpochUtc + (num * 24 * 60 * 60 * 1000);
         const tempDate = new Date(localAsUtc);
@@ -472,13 +583,89 @@ function parseCustomDate(val) {
             Math.round(tempDate.getUTCSeconds())
         ).getTime();
     }
-    
-    const parts = str.split(" ");
-    if (parts.length < 2) return NaN;
-    const dateParts = parts[0].split("-");
-    const timeParts = parts[1].split(":");
-    if (dateParts.length !== 3 || timeParts.length < 2) return NaN;
-    return new Date(+dateParts[2], (+dateParts[1]) - 1, +dateParts[0], +timeParts[0], +timeParts[1]).getTime();
+
+    // 2. Sama godzina wpisana jako tekst (np. "08:30" lub "8:30:00")
+    if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(str)) {
+        const tParts = str.split(":").map(Number);
+        const now = new Date();
+        let candidate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), tParts[0] || 0, tParts[1] || 0, tParts[2] || 0);
+        if (candidate.getTime() > now.getTime() + 5 * 60 * 1000) {
+            candidate.setDate(candidate.getDate() - 1);
+        }
+        return candidate.getTime();
+    }
+
+    // 3. Pełna data i godzina (obsługa DD-MM-YYYY, YYYY-MM-DD, DD.MM.YYYY, DD/MM/YYYY, YYYY.MM.DD, YYYY/MM/DD)
+    const normalized = str.replace(/T/i, " ").replace(/,\s*/, " ").trim();
+    const parts = normalized.split(/\s+/);
+    if (parts.length < 1) return NaN;
+
+    const dateParts = parts[0].split(/[-./]/);
+    if (dateParts.length !== 3) return NaN;
+
+    let year, month, day;
+    if (dateParts[0].length === 4 || +dateParts[0] > 31) {
+        year = +dateParts[0];
+        month = (+dateParts[1]) - 1;
+        day = +dateParts[2];
+    } else {
+        day = +dateParts[0];
+        month = (+dateParts[1]) - 1;
+        year = +dateParts[2];
+        if (year < 100) year += 2000;
+    }
+
+    let hours = 0, minutes = 0, seconds = 0;
+    if (parts.length >= 2) {
+        const timeParts = parts[1].split(":");
+        if (timeParts.length < 2) return NaN;
+        hours = +timeParts[0] || 0;
+        minutes = +timeParts[1] || 0;
+        seconds = +timeParts[2] || 0;
+    }
+
+    if (isNaN(year) || isNaN(month) || isNaN(day) || isNaN(hours) || isNaN(minutes) || isNaN(seconds)) {
+        return NaN;
+    }
+    return new Date(year, month, day, hours, minutes, seconds).getTime();
+}
+
+function parseExcelCellDate(rawVal, rawText) {
+    const msFromVal = parseCustomDate(rawVal);
+    if (!isNaN(msFromVal) && msFromVal > 0) return msFromVal;
+    if (rawText !== undefined && rawText !== null && rawText !== "") {
+        const msFromTxt = parseCustomDate(rawText);
+        if (!isNaN(msFromTxt) && msFromTxt > 0) return msFromTxt;
+    }
+    return NaN;
+}
+
+function parseManualWorkersInfo(workerStr) {
+    if (workerStr === undefined || workerStr === null) {
+        return { baseWorkers: 4, currentWorkers: 4, diff: 0, prefix: "" };
+    }
+    const raw = workerStr.toString().trim().replace(/^'/, "");
+    if (!raw) {
+        return { baseWorkers: 4, currentWorkers: 4, diff: 0, prefix: "" };
+    }
+    const segments = raw.split("/").map(s => s.trim()).filter(Boolean);
+    if (segments.length === 0) {
+        return { baseWorkers: 4, currentWorkers: 4, diff: 0, prefix: "" };
+    }
+    const lastSeg = segments[segments.length - 1];
+    const prefix = segments.slice(0, -1).join("/");
+    const tokens = lastSeg.match(/[+-]?\d+(\.\d+)?/g);
+    if (!tokens || tokens.length === 0) {
+        return { baseWorkers: 4, currentWorkers: 4, diff: 0, prefix };
+    }
+    const baseWorkers = Math.max(1, Math.round(parseFloat(tokens[0]) || 4));
+    let sum = 0;
+    for (const t of tokens) {
+        sum += parseFloat(t) || 0;
+    }
+    const currentWorkers = Math.max(0, Math.round(sum));
+    const diff = currentWorkers - baseWorkers;
+    return { baseWorkers, currentWorkers, diff, prefix };
 }
 
 function secondsToHms(d) {
@@ -490,10 +677,26 @@ function secondsToHms(d) {
 }
 
 function hmsToSeconds(hms) {
-    if (!hms || typeof hms !== 'string') return 0;
-    const parts = hms.split(":");
-    if (parts.length !== 3) return 0;
-    return (+parts[0]) * 3600 + (+parts[1]) * 60 + (+parts[2]);
+    if (hms === undefined || hms === null || hms === "") return 0;
+    if (typeof hms === "number") {
+        if (hms > 0 && hms < 1) return Math.round(hms * 86400);
+        return 0;
+    }
+    const str = hms.toString().trim().replace(/^'/, "");
+    if (!str) return 0;
+    if (/^\d+(\.\d+)?$/.test(str)) {
+        const num = parseFloat(str);
+        if (num > 0 && num < 1) return Math.round(num * 86400);
+        return 0;
+    }
+    const parts = str.split(":");
+    if (parts.length === 3) {
+        return ((+parts[0]) || 0) * 3600 + ((+parts[1]) || 0) * 60 + ((+parts[2]) || 0);
+    }
+    if (parts.length === 2) {
+        return ((+parts[0]) || 0) * 3600 + ((+parts[1]) || 0) * 60;
+    }
+    return 0;
 }
 
 function parseBreakSchedule(text) {
@@ -684,6 +887,662 @@ function renderBreaksUI(checkedCodes = [], autoDetectedCodes = [], overlapInfo =
     });
 }
 
+function normCell(v) {
+    if (v === undefined || v === null) return "";
+    return v.toString().trim().replace(/^'/, "");
+}
+
+function isMatchingExcelDate(cellVal, expectedRaw, expectedMs) {
+    const cleanVal = normCell(cellVal);
+    const cleanExp = normCell(expectedRaw);
+    if (!cleanVal && !cleanExp && isNaN(expectedMs)) return true;
+    if (!cleanVal) return false;
+    if (cleanExp && cleanVal === cleanExp) return true;
+
+    const numVal = parseFloat(cleanVal);
+    const numExp = parseFloat(cleanExp);
+    if (!isNaN(numVal) && !isNaN(numExp) && !cleanVal.includes("-") && !cleanExp.includes("-")) {
+        if (Math.abs(numVal - numExp) < 0.0008) return true; // ~1 minuta tolerancji
+    }
+
+    if (!isNaN(expectedMs) && expectedMs > 0) {
+        const ms = parseCustomDate(cleanVal);
+        if (!isNaN(ms) && Math.abs(ms - expectedMs) <= 90000) return true;
+    }
+    return false;
+}
+
+function buildRowSignatureFromValues(vals, rowIdx, isRunning = false) {
+    if (!vals) return null;
+    const item = colMap.item !== undefined ? normCell(vals[colMap.item]) : "";
+    const rev = colMap.rev !== undefined ? normCell(vals[colMap.rev]) : "";
+    const product = colMap.product !== undefined ? normCell(vals[colMap.product]) : "";
+    const nesting = colMap.nesting !== undefined ? normCell(vals[colMap.nesting]) : "";
+    const startGlobalRaw = colMap.startGlobal !== undefined ? normCell(vals[colMap.startGlobal]) : "";
+    const startGlobalMs = startGlobalRaw ? parseCustomDate(startGlobalRaw) : NaN;
+    const endGlobalRaw = colMap.endGlobal !== undefined ? normCell(vals[colMap.endGlobal]) : "";
+    const machine = colMap.machine !== undefined ? normCell(vals[colMap.machine]) : "";
+    const operatorGlobal = colMap.operator !== undefined ? normCell(vals[colMap.operator]) : "";
+    const workersGlobal = colMap.workers !== undefined ? normCell(vals[colMap.workers]) : "";
+
+    let intIdx = isRunning ? currentIntervalIndex : lastIntervalIndex;
+    let intStartRaw = "";
+    let intStartMs = NaN;
+    if (intIdx >= 0 && colMap.intervalsStart !== undefined) {
+        const colIdx = colMap.intervalsStart + 1 + (intIdx * 7) + 4;
+        intStartRaw = normCell(vals[colIdx]);
+        intStartMs = intStartRaw ? parseCustomDate(intStartRaw) : NaN;
+    }
+
+    return {
+        sheetName: activeSheetName,
+        originalRowIndex: rowIdx,
+        item: item,
+        rev: rev,
+        product: product,
+        nesting: nesting,
+        startGlobalRaw: startGlobalRaw,
+        startGlobalMs: startGlobalMs,
+        endGlobalRaw: endGlobalRaw,
+        machine: machine,
+        operatorGlobal: operatorGlobal,
+        workersGlobal: workersGlobal,
+        activeIntervalIndex: intIdx,
+        activeIntervalStartRaw: intStartRaw,
+        activeIntervalStartMs: intStartMs,
+        isRunningJob: !!isRunning
+    };
+}
+
+function scoreRowMatch(vals, sig, candidateRow = 0, refRow = 0) {
+    if (!vals || !sig) return -1;
+    const rowItem = colMap.item !== undefined ? normCell(vals[colMap.item]) : "";
+    if (sig.item && sig.item !== "-" && rowItem !== sig.item) return -1;
+
+    const rowRev = colMap.rev !== undefined ? normCell(vals[colMap.rev]) : "";
+    if (sig.rev && sig.rev !== "-" && rowRev !== sig.rev) return -1;
+
+    const rowStartGlobal = colMap.startGlobal !== undefined ? normCell(vals[colMap.startGlobal]) : "";
+    const rowEndGlobal = colMap.endGlobal !== undefined ? normCell(vals[colMap.endGlobal]) : "";
+    const rowMachine = colMap.machine !== undefined ? normCell(vals[colMap.machine]) : "";
+    const rowOp = colMap.operator !== undefined ? normCell(vals[colMap.operator]) : "";
+    const rowProd = colMap.product !== undefined ? normCell(vals[colMap.product]) : "";
+    const rowNest = colMap.nesting !== undefined ? normCell(vals[colMap.nesting]) : "";
+
+    const distancePenalty = Math.abs(candidateRow - refRow) * 0.05;
+
+    if (sig.isRunningJob) {
+        // Aktywny proces nie może być już całkowicie zakończony
+        if (rowEndGlobal !== "") return -1;
+
+        // Poziom 1: Dokładne dopasowanie czasu startu aktywnego przedziału
+        if (sig.activeIntervalIndex >= 0 && colMap.intervalsStart !== undefined) {
+            const intCol = colMap.intervalsStart + 1 + (sig.activeIntervalIndex * 7) + 4;
+            const rowIntStart = normCell(vals[intCol]);
+            if (rowIntStart && isMatchingExcelDate(rowIntStart, sig.activeIntervalStartRaw, sig.activeIntervalStartMs)) {
+                return 1000 - distancePenalty;
+            }
+        }
+
+        // Poziom 2: Dokładne dopasowanie globalnego czasu startu wiersza
+        if ((sig.startGlobalRaw || !isNaN(sig.startGlobalMs)) && rowStartGlobal) {
+            if (isMatchingExcelDate(rowStartGlobal, sig.startGlobalRaw, sig.startGlobalMs)) {
+                return 850 - distancePenalty;
+            }
+        }
+
+        // Poziom 3: Rozpoczęty, niezakończony wiersz z tą samą maszyną i operatorem
+        if (rowStartGlobal !== "" && rowEndGlobal === "") {
+            if (sig.machine && rowMachine === sig.machine && sig.operatorGlobal && rowOp === sig.operatorGlobal) {
+                return 700 - distancePenalty;
+            }
+            if (sig.machine && rowMachine === sig.machine) {
+                return 550 - distancePenalty;
+            }
+        }
+        return -1;
+    }
+
+    // Jeśli wiersz był kontynuowany (posiadał już Start Globalny przed kliknięciem START CZASU)
+    if (sig.startGlobalRaw !== "" || !isNaN(sig.startGlobalMs)) {
+        if (rowEndGlobal !== "") return -1;
+        if (rowStartGlobal && isMatchingExcelDate(rowStartGlobal, sig.startGlobalRaw, sig.startGlobalMs)) {
+            return 900 - distancePenalty;
+        }
+        if (rowStartGlobal !== "" && sig.machine && rowMachine === sig.machine) {
+            return 600 - distancePenalty;
+        }
+        return -1;
+    }
+
+    // Jeśli wiersz jest zupełnie nowy (jeszcze nierozpoczęty, w karcie Dane z wiersza / Wybór maszyny)
+    if (rowStartGlobal !== "" || rowEndGlobal !== "") return -1;
+    if (sig.product && sig.product !== "-" && rowProd !== sig.product) return -1;
+    if (sig.nesting && sig.nesting !== "-" && rowNest !== sig.nesting) return -1;
+
+    return 750 - distancePenalty;
+}
+
+function doesRowMatchSignature(vals, sig) {
+    return scoreRowMatch(vals, sig, 0, 0) > 0;
+}
+
+async function bindTrackedRowCell(context, sheet, rowIdx) {
+    if (rowIdx < 0) return;
+    try {
+        const colIdx = colMap.item !== undefined ? colMap.item : 0;
+        const cell = sheet.getCell(rowIdx, colIdx);
+        context.workbook.bindings.add(cell, Excel.BindingType.text, TRACKED_ROW_BINDING_ID);
+        await context.sync();
+    } catch (e) {
+        // Ignoruj ewentualny błąd powiązania na chronionym arkuszu - sygnatura danych przejmuje śledzenie
+    }
+}
+
+function parseHeaderMatrixToColMap(matrix) {
+    const newColMap = {};
+    let itemRow = -1;
+    let startDayRow = -1;
+    let dataStartColIndex = -1;
+    let dataStartHeaderRow = -1;
+    const maxRows = matrix ? matrix.length : 0;
+
+    // KROK 1: Znajdź START DANYCH i określ tryb
+    for (let r = 0; r < maxRows; r++) {
+        const row = matrix[r];
+        if (!row) continue;
+        for (let c = 0; c < row.length; c++) {
+            const val = row[c] ? row[c].toString().trim() : "";
+            if (val.toUpperCase() === "START DANYCH") {
+                dataStartColIndex = c;
+                dataStartHeaderRow = r;
+                break;
+            }
+        }
+        if (dataStartColIndex !== -1) break;
+    }
+
+    let detectedMode = "DEFAULT";
+    if (dataStartColIndex !== -1 && dataStartHeaderRow > 0) {
+        const aboveVal = matrix[dataStartHeaderRow - 1] && matrix[dataStartHeaderRow - 1][dataStartColIndex]
+            ? matrix[dataStartHeaderRow - 1][dataStartColIndex].toString().trim().toUpperCase()
+            : "";
+        if (aboveVal === "CCS_S") {
+            detectedMode = "CCS_S";
+        } else if (aboveVal === "VIS") {
+            detectedMode = "VIS";
+        }
+    }
+
+    // KROK 2: Mapuj kolumny w oparciu o wykryty tryb
+    for (let r = 0; r < maxRows; r++) {
+        const row = matrix[r];
+        if (!row) continue;
+        for (let c = 0; c < row.length; c++) {
+            const val = row[c] ? row[c].toString().trim() : "";
+            if (!val) continue;
+
+            const valUpper = val.toUpperCase();
+
+            // Wspólne kolumny dla wszystkich trybów
+            if (valUpper === "OPERATOR") { newColMap.operator = c; }
+            else if (valUpper === "ILOŚĆ PRACOWNIKÓW") { newColMap.workers = c; }
+            else if (valUpper === "NOTES") { newColMap.notes = c; }
+            else if (valUpper === "ZMIANA MATERIAŁU?") { newColMap.chkMat = c; }
+            else if (valUpper === "PRZERWA?") { newColMap.chkBreak = c; }
+            else if (valUpper === "AWARIE") { newColMap.userAwarie = c; }
+            else if (valUpper === "CZAS TEORETYCZNY") { newColMap.theoretical = c; }
+
+            // Kolumny zależne od trybu
+            if (detectedMode === "DEFAULT") {
+                if (valUpper === "ITEM PRODUKTU") { newColMap.item = c; itemRow = r; }
+                else if (valUpper === "REWIZJA") { newColMap.rev = c; }
+                else if (valUpper === "NAZWA PRODUKTU") { newColMap.product = c; }
+                else if (valUpper === "NAZWA NESTINGU") { newColMap.nesting = c; }
+                else if (valUpper === "TOLERANCJA") { newColMap.tol = c; }
+                else if (valUpper === "LICZBA KITÓW/WARSTWA") { newColMap.expLayers = c; }
+                else if (valUpper === "MAX ROLEK") { newColMap.maxRolls = c; }
+                else if (valUpper.includes("START (DAY")) { newColMap.startGlobal = c; startDayRow = r; }
+                else if (valUpper.includes("END (DAY")) { newColMap.endGlobal = c; }
+            } else if (detectedMode === "VIS") {
+                if (valUpper === "ITEM") { newColMap.item = c; itemRow = r; }
+                else if (valUpper === "REV") { newColMap.rev = c; }
+                else if (valUpper === "NAZWA") { newColMap.product = c; }
+                else if (valUpper === "CZĘŚCI / ELEMENTY") { newColMap.nesting = c; }
+                else if (valUpper === "UN") { newColMap.expLayers = c; }
+                else if (valUpper === "START") { newColMap.startGlobal = c; startDayRow = r; }
+                else if (valUpper === "KONIEC") { newColMap.endGlobal = c; }
+            } else if (detectedMode === "CCS_S") {
+                if (valUpper === "ITEM") { newColMap.item = c; itemRow = r; }
+                else if (valUpper === "REV") { newColMap.rev = c; }
+                else if (valUpper === "NAZWA") { newColMap.product = c; }
+                else if (valUpper === "PROGRAM") { newColMap.nesting = c; }
+                else if (valUpper === "UN") { newColMap.expLayers = c; }
+                else if (valUpper === "START") { newColMap.startGlobal = c; startDayRow = r; }
+                else if (valUpper === "KONIEC") { newColMap.endGlobal = c; }
+                else if (valUpper === "TOLERANCJA") {
+                    newColMap.tol = c;
+                    newColMap.tol_biax = c;
+                    newColMap.tol_undir = c + 1;
+                }
+            }
+        }
+    }
+
+    const missing = [];
+    if (dataStartColIndex === -1) missing.push("START DANYCH");
+
+    if (detectedMode === "DEFAULT") {
+        if (newColMap.item === undefined) missing.push("ITEM PRODUKTU");
+        if (newColMap.rev === undefined) missing.push("REWIZJA");
+        if (newColMap.product === undefined) missing.push("NAZWA PRODUKTU");
+        if (newColMap.nesting === undefined) missing.push("NAZWA NESTINGU");
+        if (newColMap.tol === undefined) missing.push("TOLERANCJA");
+        if (newColMap.expLayers === undefined) missing.push("LICZBA KITÓW/WARSTWA");
+        if (newColMap.maxRolls === undefined) missing.push("MAX ROLEK");
+        if (newColMap.startGlobal === undefined) missing.push("Start (Day+Hour)");
+        if (newColMap.endGlobal === undefined) missing.push("End (Day+Hour)");
+    } else if (detectedMode === "VIS") {
+        if (newColMap.item === undefined) missing.push("ITEM");
+        if (newColMap.rev === undefined) missing.push("REV");
+        if (newColMap.product === undefined) missing.push("NAZWA");
+        if (newColMap.nesting === undefined) missing.push("CZĘŚCI / ELEMENTY");
+        if (newColMap.expLayers === undefined) missing.push("UN");
+        if (newColMap.startGlobal === undefined) missing.push("START");
+        if (newColMap.endGlobal === undefined) missing.push("KONIEC");
+    } else if (detectedMode === "CCS_S") {
+        if (newColMap.item === undefined) missing.push("ITEM");
+        if (newColMap.rev === undefined) missing.push("REV");
+        if (newColMap.product === undefined) missing.push("NAZWA");
+        if (newColMap.nesting === undefined) missing.push("PROGRAM");
+        if (newColMap.expLayers === undefined) missing.push("UN");
+        if (newColMap.startGlobal === undefined) missing.push("START");
+        if (newColMap.endGlobal === undefined) missing.push("KONIEC");
+        if (newColMap.tol === undefined) missing.push("TOLERANCJA");
+    }
+
+    if (newColMap.userAwarie === undefined) missing.push("AWARIE");
+    if (newColMap.operator === undefined) missing.push("OPERATOR");
+    if (newColMap.workers === undefined) missing.push("ILOŚĆ PRACOWNIKÓW");
+
+    const headerRow = Math.max(itemRow, startDayRow, dataStartHeaderRow);
+
+    if (dataStartColIndex !== -1) {
+        newColMap.machine = dataStartColIndex + 1;
+        newColMap.awarie = dataStartColIndex + 2;
+        newColMap.netTime = dataStartColIndex + 3;
+        newColMap.loadingTime = dataStartColIndex + 4;
+        newColMap.breakTime = dataStartColIndex + 5;
+        newColMap.totalKits = dataStartColIndex + 6;
+        newColMap.avgWorkers = dataStartColIndex + 7;
+        newColMap.breakCodes = dataStartColIndex + 8;
+        newColMap.intervalsStart = dataStartColIndex + 9;
+
+        // Jeśli nagłówki po START DANYCH już istnieją (i np. ktoś wstawił tam kolumnę), dopasuj po nazwie
+        if (headerRow >= 0 && matrix[headerRow]) {
+            const hRow = matrix[headerRow];
+            const scanLimit = Math.min(hRow.length, dataStartColIndex + 25);
+            for (let c = dataStartColIndex + 1; c < scanLimit; c++) {
+                const hVal = hRow[c] ? hRow[c].toString().trim().toUpperCase() : "";
+                if (!hVal) continue;
+                if (hVal === "MASZYNA") newColMap.machine = c;
+                else if (hVal === "AWARIE DANE") newColMap.awarie = c;
+                else if (hVal === "CZAS NETTO") newColMap.netTime = c;
+                else if (hVal === "SUMARYCZNY CZAS ŁADOWANIA") newColMap.loadingTime = c;
+                else if (hVal === "SUMARYCZNY CZAS PRZERW") newColMap.breakTime = c;
+                else if (hVal === "SUMA KITÓW") newColMap.totalKits = c;
+                else if (hVal === "ŚREDNIA PRACOWNIKÓW") newColMap.avgWorkers = c;
+                else if (hVal === "KOD PRZERW") newColMap.breakCodes = c;
+                else if (hVal === "START PRZEDZIAŁÓW") newColMap.intervalsStart = c;
+            }
+        }
+    }
+
+    let foundNoPass = false;
+    let noPassRow = -1;
+    if (dataStartColIndex !== -1) {
+        for (let r = 0; r < maxRows; r++) {
+            const val = matrix[r] && matrix[r][dataStartColIndex]
+                ? matrix[r][dataStartColIndex].toString().trim().toUpperCase()
+                : "";
+            if (val === "NOPASS") {
+                foundNoPass = true;
+                noPassRow = r;
+                break;
+            }
+        }
+    }
+
+    let scheduleText = "";
+    if (dataStartColIndex !== -1) {
+        if (noPassRow !== -1 && noPassRow + 1 < maxRows) {
+            const cellVal = matrix[noPassRow + 1][dataStartColIndex];
+            if (cellVal) scheduleText = cellVal.toString().trim();
+        }
+        if (!scheduleText && matrix[1] && matrix[1][dataStartColIndex]) {
+            const valBX2 = matrix[1][dataStartColIndex].toString().trim();
+            if (/\d{1,2}:\d{2}/.test(valBX2)) {
+                scheduleText = valBX2;
+            }
+        }
+        if (!scheduleText) {
+            for (let r = 0; r < maxRows; r++) {
+                const cVal = matrix[r] && matrix[r][dataStartColIndex]
+                    ? matrix[r][dataStartColIndex].toString().trim()
+                    : "";
+                if (cVal && /\d{1,2}:\d{2}\s*[-–—]\s*\d{1,2}:\d{2}/.test(cVal)) {
+                    scheduleText = cVal;
+                    break;
+                }
+            }
+        }
+    }
+
+    return {
+        detectedMode,
+        colMap: newColMap,
+        dataStartColIndex,
+        dataStartHeaderRow,
+        headerRow,
+        dataStartRowIndex: headerRow + 1,
+        missing,
+        foundNoPass,
+        scheduleText
+    };
+}
+
+function applyParsedHeaderMap(parsed) {
+    if (!parsed || parsed.missing.length > 0) {
+        return { colChanged: false, rowHeaderChanged: false };
+    }
+    let colChanged = false;
+    const allKeys = new Set([...Object.keys(colMap || {}), ...Object.keys(parsed.colMap || {})]);
+    for (const k of allKeys) {
+        if (colMap[k] !== parsed.colMap[k]) {
+            colChanged = true;
+            break;
+        }
+    }
+    const rowHeaderChanged = (dataStartRowIndex !== -1 && dataStartRowIndex !== parsed.dataStartRowIndex);
+
+    currentMode = parsed.detectedMode;
+    colMap = parsed.colMap;
+    dataStartRowIndex = parsed.dataStartRowIndex;
+    noPassMode = parsed.foundNoPass;
+
+    if (parsed.scheduleText !== rawBreakScheduleText) {
+        rawBreakScheduleText = parsed.scheduleText;
+        globalBreakSchedule = parseBreakSchedule(parsed.scheduleText);
+    }
+
+    if (currentIntervalIndex >= 0 && colMap.intervalsStart !== undefined) {
+        currentIntervalStartCol = colMap.intervalsStart + 1 + (currentIntervalIndex * 7);
+    }
+
+    return { colChanged, rowHeaderChanged };
+}
+
+async function searchForMovedRow(context, sheet, referenceRow, sig) {
+    if (!sig) return null;
+    const minRow = Math.max(0, dataStartRowIndex);
+    const maxColNeeded = Math.max(
+        (colMap.intervalsStart !== undefined ? colMap.intervalsStart + 72 : 120),
+        (colMap.endGlobal !== undefined ? colMap.endGlobal + 1 : 30),
+        (colMap.item !== undefined ? colMap.item + 1 : 10),
+        100
+    );
+    const colsToLoad = Math.min(250, maxColNeeded);
+
+    // KROK 1: Szybkie przeszukanie sąsiedztwa (+/- 60 wierszy wokół ostatniej znanej pozycji)
+    const windowRadius = 60;
+    const winStart = Math.max(minRow, referenceRow - windowRadius);
+    const winCount = (windowRadius * 2) + 1;
+
+    const localRange = sheet.getRangeByIndexes(winStart, 0, winCount, colsToLoad).load("values");
+    await context.sync();
+
+    let bestScore = -1;
+    let bestRow = -1;
+    let bestVals = null;
+
+    for (let i = 0; i < localRange.values.length; i++) {
+        const rIdx = winStart + i;
+        const rowVals = localRange.values[i];
+        const sc = scoreRowMatch(rowVals, sig, rIdx, referenceRow);
+        if (sc > bestScore) {
+            bestScore = sc;
+            bestRow = rIdx;
+            bestVals = rowVals;
+        }
+    }
+
+    if (bestRow >= minRow && bestScore > 0) {
+        return { rowIndex: bestRow, rowValues: bestVals };
+    }
+
+    // KROK 2: Pełne skanowanie arkusza (gdy przesunięcie było większe niż 60 wierszy lub posortowano tabelę)
+    let totalRowsToScan = 3000;
+    try {
+        const used = sheet.getUsedRangeOrNullObject(true);
+        used.load("rowCount");
+        await context.sync();
+        if (!used.isNullObject && used.rowCount > minRow) {
+            totalRowsToScan = Math.min(Math.max(used.rowCount - minRow + 50, 3000), 10000);
+        }
+    } catch (e) {
+        totalRowsToScan = 3000;
+    }
+
+    const fullRange = sheet.getRangeByIndexes(minRow, 0, totalRowsToScan, colsToLoad).load("values");
+    await context.sync();
+
+    for (let i = 0; i < fullRange.values.length; i++) {
+        const rIdx = minRow + i;
+        const rowVals = fullRange.values[i];
+        const sc = scoreRowMatch(rowVals, sig, rIdx, referenceRow);
+        if (sc > bestScore) {
+            bestScore = sc;
+            bestRow = rIdx;
+            bestVals = rowVals;
+        }
+    }
+
+    if (bestRow >= minRow && bestScore > 0) {
+        return { rowIndex: bestRow, rowValues: bestVals };
+    }
+    return null;
+}
+
+function applyRelocatedRow(newRowIdx, oldRowIdx, colChanged) {
+    currentRowIndex = newRowIdx;
+    if (activeRowSignature) {
+        activeRowSignature.originalRowIndex = newRowIdx;
+    }
+    updateRowIndicatorsUI(currentRowIndex);
+    saveActiveSession();
+
+    if (newRowIdx !== oldRowIdx && colChanged) {
+        setStatus(`Wykryto zmianę wierszy i kolumn: śledzony wiersz to teraz ${newRowIdx + 1} (był ${oldRowIdx + 1}).`);
+    } else if (newRowIdx !== oldRowIdx) {
+        setStatus(`Wykryto zmianę wierszy: śledzony wiersz to teraz ${newRowIdx + 1} (był ${oldRowIdx + 1}).`);
+    } else if (colChanged) {
+        setStatus(`Zaktualizowano układ kolumn (Wiersz ${newRowIdx + 1}).`);
+    }
+}
+
+async function ensureRowAndColumnsSynced(context, sheet, options = {}) {
+    if (!sheet) {
+        sheet = activeSheetName
+            ? context.workbook.worksheets.getItem(activeSheetName)
+            : context.workbook.worksheets.getActiveWorksheet();
+    }
+
+    const headerRange = sheet.getRange("A1:GZ25").load("values");
+    const isTrackingMainRow = (options.rowIndex === undefined);
+    const targetRow = isTrackingMainRow ? currentRowIndex : options.rowIndex;
+    const targetSig = options.signature || (isTrackingMainRow ? activeRowSignature : null);
+
+    let bindingObj = null;
+    if (isTrackingMainRow && targetRow >= 0) {
+        bindingObj = context.workbook.bindings.getItemOrNullObject(TRACKED_ROW_BINDING_ID);
+        bindingObj.load("isNullObject");
+    }
+
+    let currentRowRange = null;
+    if (targetRow >= 0) {
+        currentRowRange = sheet.getRangeByIndexes(targetRow, 0, 1, 250).load("values");
+    }
+
+    await context.sync();
+
+    // 1. Zaktualizuj mapę kolumn i wiersz nagłówkowy
+    const parsedHeaders = parseHeaderMatrixToColMap(headerRange.values);
+    if (parsedHeaders.missing.length > 0) {
+        throw new Error("Brakuje wymaganych kolumn w arkuszu: " + parsedHeaders.missing.join(", "));
+    }
+    const { colChanged, rowHeaderChanged } = applyParsedHeaderMap(parsedHeaders);
+
+    if (targetRow < 0 || !targetSig) {
+        return { rowIndex: targetRow, rowChanged: false, colChanged };
+    }
+
+    const currentVals = (currentRowRange && currentRowRange.values && currentRowRange.values[0])
+        ? currentRowRange.values[0]
+        : null;
+
+    const hasUniqueTimestamp = !!(targetSig.isRunningJob || targetSig.startGlobalRaw !== "" || !isNaN(targetSig.startGlobalMs));
+
+    // Szybka ścieżka: jeśli zadanie ma unikalny znacznik czasu i wiersz pod targetRow nadal idealnie pasuje
+    if (hasUniqueTimestamp && !rowHeaderChanged && targetRow >= dataStartRowIndex && currentVals && doesRowMatchSignature(currentVals, targetSig)) {
+        if (colChanged && isTrackingMainRow) {
+            applyRelocatedRow(targetRow, targetRow, true);
+        }
+        return { rowIndex: targetRow, rowChanged: false, colChanged, rowValues: currentVals };
+    }
+
+    // 2. Sprawdź powiązanie (Binding) komórki w Excelu (szczególnie przydatne dla nierozpoczętych wierszy lub po wstawieniu wiersza)
+    if (isTrackingMainRow && bindingObj && !bindingObj.isNullObject) {
+        try {
+            const boundRange = bindingObj.getRange().load("rowIndex");
+            await context.sync();
+            const boundRowIdx = boundRange.rowIndex;
+            if (typeof boundRowIdx === "number" && boundRowIdx >= dataStartRowIndex) {
+                if (boundRowIdx === targetRow && currentVals && doesRowMatchSignature(currentVals, targetSig)) {
+                    if (colChanged) applyRelocatedRow(targetRow, targetRow, true);
+                    return { rowIndex: targetRow, rowChanged: false, colChanged, rowValues: currentVals };
+                } else if (boundRowIdx !== targetRow) {
+                    const boundRowRange = sheet.getRangeByIndexes(boundRowIdx, 0, 1, 250).load("values");
+                    await context.sync();
+                    const boundVals = boundRowRange.values[0];
+                    if (doesRowMatchSignature(boundVals, targetSig)) {
+                        const oldRow = targetRow;
+                        applyRelocatedRow(boundRowIdx, oldRow, colChanged);
+                        return { rowIndex: boundRowIdx, rowChanged: true, oldRowIndex: oldRow, colChanged, rowValues: boundVals };
+                    }
+                }
+            }
+        } catch (e) {
+            // Jeśli binding zawiódł, przejdź do weryfikacji sygnatury
+        }
+    }
+
+    // 3. Sprawdź, czy obecny targetRow pasuje do sygnatury
+    if (targetRow >= dataStartRowIndex && currentVals && doesRowMatchSignature(currentVals, targetSig)) {
+        if (colChanged && isTrackingMainRow) {
+            applyRelocatedRow(targetRow, targetRow, true);
+        }
+        return { rowIndex: targetRow, rowChanged: false, colChanged, rowValues: currentVals };
+    }
+
+    // 4. Przeszukaj arkusz w celu odnalezienia przesuniętego wiersza
+    const found = await searchForMovedRow(context, sheet, targetRow, targetSig);
+    if (found && found.rowIndex >= dataStartRowIndex) {
+        const oldRow = targetRow;
+        if (isTrackingMainRow) {
+            applyRelocatedRow(found.rowIndex, oldRow, colChanged);
+            await bindTrackedRowCell(context, sheet, found.rowIndex);
+        }
+        return {
+            rowIndex: found.rowIndex,
+            rowChanged: found.rowIndex !== oldRow,
+            oldRowIndex: oldRow,
+            colChanged,
+            rowValues: found.rowValues
+        };
+    }
+
+    throw new Error(`Nie można odnaleźć śledzonego wiersza (Item: ${targetSig.item || "-"}) w arkuszu! Sprawdź, czy wiersz nie został usunięty.`);
+}
+
+async function ensureSheetChangeListener(context, sheet) {
+    if (!sheet) return;
+    try {
+        sheet.load("name");
+        await context.sync();
+        const sName = sheet.name;
+        if (!sheetsWithChangeListener.has(sName) && sheet.onChanged) {
+            sheet.onChanged.add(onWorksheetChanged);
+            await context.sync();
+            sheetsWithChangeListener.add(sName);
+        }
+    } catch (e) {
+        console.warn("Nie udało się zarejestrować nasłuchiwania zmian arkusza:", e);
+    }
+}
+
+function onWorksheetChanged(event) {
+    const chType = event && event.changeType ? event.changeType.toString() : "";
+    const isStructural = (
+        chType === "RowInserted" ||
+        chType === "RowDeleted" ||
+        chType === "ColumnInserted" ||
+        chType === "ColumnDeleted"
+    );
+
+    if (!isStructural) {
+        if (internalWriteDepth > 0 || (Date.now() - lastInternalWriteTime < 800)) {
+            return;
+        }
+    }
+    scheduleStructureSync(chType || "SheetChanged");
+}
+
+function scheduleStructureSync(reason = "") {
+    if (structureSyncTimeout) {
+        clearTimeout(structureSyncTimeout);
+    }
+    structureSyncTimeout = setTimeout(async () => {
+        if (isSyncingStructure || isStartingProcess || isSavingProcess || internalWriteDepth > 0) return;
+        isSyncingStructure = true;
+        try {
+            if (currentRowIndex >= 0 && activeRowSignature && activeSheetName) {
+                await Excel.run(async (context) => {
+                    const sheet = context.workbook.worksheets.getItem(activeSheetName);
+                    await ensureRowAndColumnsSynced(context, sheet);
+                });
+            } else {
+                const initCard = document.getElementById("initial-card");
+                const isStructural = (
+                    reason === "RowInserted" ||
+                    reason === "RowDeleted" ||
+                    reason === "ColumnInserted" ||
+                    reason === "ColumnDeleted"
+                );
+                if (initCard && !initCard.classList.contains("hidden") && isStructural) {
+                    await Excel.run(async (context) => {
+                        await initializeColumnMap(context);
+                        await scanForUnfinished(context);
+                    });
+                }
+            }
+        } catch (e) {
+            console.warn("Synchronizacja struktury arkusza w tle:", e);
+        } finally {
+            isSyncingStructure = false;
+        }
+    }, 400);
+}
+
 async function autoDetectBreaksForCurrentJob() {
     if (!globalBreakSchedule || globalBreakSchedule.length === 0) {
         const currentChecked = [];
@@ -697,11 +1556,12 @@ async function autoDetectBreaksForCurrentJob() {
 
     const intervals = [];
     
-    // 1. Wczytaj wcześniejsze przedziały zapisanego wiersza z Excela
+    // 1. Wczytaj wcześniejsze przedziały zapisanego wiersza z Excela (po wcześniejszej weryfikacji pozycji wiersza i kolumn)
     if (colMap.intervalsStart !== undefined && currentRowIndex > 0) {
         try {
             await Excel.run(async (context) => {
                 const sheet = context.workbook.worksheets.getItem(activeSheetName);
+                await ensureRowAndColumnsSynced(context, sheet);
                 const dataRange = sheet.getRangeByIndexes(currentRowIndex, colMap.intervalsStart + 1, 1, 70).load("values");
                 await context.sync();
                 const vals = dataRange.values[0];
@@ -751,6 +1611,9 @@ async function onWorksheetActivated(event) {
     if (timerInterval !== null || localStorage.getItem(ACTIVE_SESSION_KEY)) return;
     
     clearAllTimers();
+    activeRowSignature = null;
+    currentRowIndex = -1;
+    updateRowIndicatorsUI(-1);
     document.getElementById("data-card").classList.add("hidden");
     document.getElementById("machine-card").classList.add("hidden");
     document.getElementById("running-card").classList.add("hidden");
@@ -771,205 +1634,30 @@ async function onWorksheetActivated(event) {
 
 async function initializeColumnMap(context) {
     const sheet = context.workbook.worksheets.getActiveWorksheet();
-    const range = sheet.getRange("A1:EU10").load("values"); 
+    const range = sheet.getRange("A1:GZ25").load("values"); 
     await context.sync();
     
-    colMap = {};
-    let itemRow = -1;
-    let startDayRow = -1;
-    let dataStartColIndex = -1;
-    let dataStartHeaderRow = -1;
-
-    // KROK 1: Najpierw znajdź START DANYCH i określ tryb
-    for (let r = 0; r < 10; r++) {
-        const row = range.values[r];
-        if (!row) continue;
-        for (let c = 0; c < row.length; c++) {
-            const val = row[c] ? row[c].toString().trim() : "";
-            if (val.toUpperCase() === "START DANYCH") {
-                dataStartColIndex = c;
-                dataStartHeaderRow = r;
-                break;
-            }
-        }
-        if (dataStartColIndex !== -1) break;
-    }
-
-    // Określamy tryb na podstawie komórki nad START DANYCH
-    let detectedMode = "DEFAULT";
-    if (dataStartColIndex !== -1 && dataStartHeaderRow > 0) {
-        const aboveVal = range.values[dataStartHeaderRow - 1][dataStartColIndex] 
-            ? range.values[dataStartHeaderRow - 1][dataStartColIndex].toString().trim().toUpperCase() 
-            : "";
-        if (aboveVal === "CCS_S") {
-            detectedMode = "CCS_S";
-        } else if (aboveVal === "VIS") {
-            detectedMode = "VIS";
-        }
-    }
-    currentMode = detectedMode;
-
-    // KROK 2: Mapuj kolumny w oparciu o wykryty tryb
-    for (let r = 0; r < 10; r++) {
-        const row = range.values[r];
-        if (!row) continue;
-        for (let c = 0; c < row.length; c++) {
-            const val = row[c] ? row[c].toString().trim() : "";
-            if (!val) continue;
-
-            const valUpper = val.toUpperCase();
-
-            // Wspólne kolumny dla wszystkich trybów
-            if (valUpper === "OPERATOR") { colMap.operator = c; }
-            else if (valUpper === "ILOŚĆ PRACOWNIKÓW") { colMap.workers = c; }
-            else if (valUpper === "NOTES") { colMap.notes = c; }
-            else if (valUpper === "ZMIANA MATERIAŁU?") { colMap.chkMat = c; }
-            else if (valUpper === "PRZERWA?") { colMap.chkBreak = c; }
-            else if (valUpper === "AWARIE") { colMap.userAwarie = c; }
-            else if (valUpper === "CZAS TEORETYCZNY") { colMap.theoretical = c; }
-
-            // Kolumny zależne od trybu
-            if (currentMode === "DEFAULT") {
-                if (valUpper === "ITEM PRODUKTU") { colMap.item = c; itemRow = r; }
-                else if (valUpper === "REWIZJA") { colMap.rev = c; }
-                else if (valUpper === "NAZWA PRODUKTU") { colMap.product = c; }
-                else if (valUpper === "NAZWA NESTINGU") { colMap.nesting = c; }
-                else if (valUpper === "TOLERANCJA") { colMap.tol = c; }
-                else if (valUpper === "LICZBA KITÓW/WARSTWA") { colMap.expLayers = c; }
-                else if (valUpper === "MAX ROLEK") { colMap.maxRolls = c; }
-                else if (valUpper.includes("START (DAY")) { colMap.startGlobal = c; startDayRow = r; }
-                else if (valUpper.includes("END (DAY")) { colMap.endGlobal = c; }
-            } else if (currentMode === "VIS") {
-                if (valUpper === "ITEM") { colMap.item = c; itemRow = r; }
-                else if (valUpper === "REV") { colMap.rev = c; }
-                else if (valUpper === "NAZWA") { colMap.product = c; }
-                else if (valUpper === "CZĘŚCI / ELEMENTY") { colMap.nesting = c; }
-                else if (valUpper === "UN") { colMap.expLayers = c; }
-                else if (valUpper === "START") { colMap.startGlobal = c; startDayRow = r; }
-                else if (valUpper === "KONIEC") { colMap.endGlobal = c; }
-            } else if (currentMode === "CCS_S") {
-                if (valUpper === "ITEM") { colMap.item = c; itemRow = r; }
-                else if (valUpper === "REV") { colMap.rev = c; }
-                else if (valUpper === "NAZWA") { colMap.product = c; }
-                else if (valUpper === "PROGRAM") { colMap.nesting = c; }
-                else if (valUpper === "UN") { colMap.expLayers = c; }
-                else if (valUpper === "START") { colMap.startGlobal = c; startDayRow = r; }
-                else if (valUpper === "KONIEC") { colMap.endGlobal = c; }
-                else if (valUpper === "TOLERANCJA") { 
-                    colMap.tol = c; 
-                    colMap.tol_biax = c; 
-                    colMap.tol_undir = c + 1; 
-                }
-            }
-        }
-    }
-
-    // Zbieramy braki
-    const missing = [];
-    if (dataStartColIndex === -1) missing.push("START DANYCH");
-    
-    if (currentMode === "DEFAULT") {
-        if (colMap.item === undefined) missing.push("ITEM PRODUKTU");
-        if (colMap.rev === undefined) missing.push("REWIZJA");
-        if (colMap.product === undefined) missing.push("NAZWA PRODUKTU");
-        if (colMap.nesting === undefined) missing.push("NAZWA NESTINGU");
-        if (colMap.tol === undefined) missing.push("TOLERANCJA");
-        if (colMap.expLayers === undefined) missing.push("LICZBA KITÓW/WARSTWA");
-        if (colMap.maxRolls === undefined) missing.push("MAX ROLEK");
-        if (colMap.startGlobal === undefined) missing.push("Start (Day+Hour)");
-        if (colMap.endGlobal === undefined) missing.push("End (Day+Hour)");
-    } else if (currentMode === "VIS") {
-        if (colMap.item === undefined) missing.push("ITEM");
-        if (colMap.rev === undefined) missing.push("REV");
-        if (colMap.product === undefined) missing.push("NAZWA");
-        if (colMap.nesting === undefined) missing.push("CZĘŚCI / ELEMENTY");
-        if (colMap.expLayers === undefined) missing.push("UN");
-        if (colMap.startGlobal === undefined) missing.push("START");
-        if (colMap.endGlobal === undefined) missing.push("KONIEC");
-    } else if (currentMode === "CCS_S") {
-        if (colMap.item === undefined) missing.push("ITEM");
-        if (colMap.rev === undefined) missing.push("REV");
-        if (colMap.product === undefined) missing.push("NAZWA");
-        if (colMap.nesting === undefined) missing.push("PROGRAM");
-        if (colMap.expLayers === undefined) missing.push("UN");
-        if (colMap.startGlobal === undefined) missing.push("START");
-        if (colMap.endGlobal === undefined) missing.push("KONIEC");
-        if (colMap.tol === undefined) missing.push("TOLERANCJA");
-    }
-
-    if (colMap.userAwarie === undefined) missing.push("AWARIE");
-    if (colMap.operator === undefined) missing.push("OPERATOR");
-    if (colMap.workers === undefined) missing.push("ILOŚĆ PRACOWNIKÓW");
+    const parsed = parseHeaderMatrixToColMap(range.values);
+    currentMode = parsed.detectedMode;
+    colMap = parsed.colMap;
+    const missing = parsed.missing;
+    const dataStartColIndex = parsed.dataStartColIndex;
+    const headerRow = parsed.headerRow;
 
     if (missing.length > 0) {
         document.getElementById("btn-fetch").style.display = "none";
-        document.getElementById("unfinished-list").innerHTML = `<div style="color:#dc2626; font-size:13px; padding:10px; border:1px solid #fca5a5; background:#fef2f2; border-radius:6px; line-height:1.4;"><b>BŁĄD STRUKTURY ARKUSZA:</b><br>Brakuje następujących kolumn w pierwszych 10 wierszach:<br><br><b>${missing.join(", ")}</b></div>`;
+        document.getElementById("unfinished-list").innerHTML = `<div style="color:#dc2626; font-size:13px; padding:10px; border:1px solid #fca5a5; background:#fef2f2; border-radius:6px; line-height:1.4;"><b>BŁĄD STRUKTURY ARKUSZA:</b><br>Brakuje następujących kolumn w nagłówkach arkusza:<br><br><b>${missing.join(", ")}</b></div>`;
         document.getElementById("unfinished-container").style.display = "block";
         throw new Error("Brakuje kolumn: " + missing.join(", "));
     } else {
         document.getElementById("btn-fetch").style.display = "inline-block";
     }
 
-    // Odczytaj tryb NoPass oraz harmonogram przerw z kolumny START DANYCH
-    let foundNoPass = false;
-    let noPassRow = -1;
-    if (dataStartColIndex !== -1) {
-        for (let r = 0; r < 10; r++) {
-            const val = range.values[r] && range.values[r][dataStartColIndex] 
-                ? range.values[r][dataStartColIndex].toString().trim().toUpperCase() 
-                : "";
-            if (val === "NOPASS") {
-                foundNoPass = true;
-                noPassRow = r;
-                break;
-            }
-        }
-    }
-    noPassMode = foundNoPass;
-
-    // Harmonogram przerw znajduje się w komórce bezpośrednio pod NoPass (np. BX2 pod BX1)
-    let scheduleText = "";
-    if (dataStartColIndex !== -1) {
-        if (noPassRow !== -1 && noPassRow + 1 < 10) {
-            const cellVal = range.values[noPassRow + 1][dataStartColIndex];
-            if (cellVal) scheduleText = cellVal.toString().trim();
-        }
-        // Fallback: jeśli pod NoPass nic nie ma lub NoPass nie został znaleziony, sprawdź BX2 (r=1) lub przeszukaj wiersze 0-9
-        if (!scheduleText && range.values[1] && range.values[1][dataStartColIndex]) {
-            const valBX2 = range.values[1][dataStartColIndex].toString().trim();
-            if (/\d{1,2}:\d{2}/.test(valBX2)) {
-                scheduleText = valBX2;
-            }
-        }
-        if (!scheduleText) {
-            for (let r = 0; r < 10; r++) {
-                const cVal = range.values[r] && range.values[r][dataStartColIndex]
-                    ? range.values[r][dataStartColIndex].toString().trim()
-                    : "";
-                if (cVal && /\d{1,2}:\d{2}\s*[-–—]\s*\d{1,2}:\d{2}/.test(cVal)) {
-                    scheduleText = cVal;
-                    break;
-                }
-            }
-        }
-    }
-
-    rawBreakScheduleText = scheduleText;
-    globalBreakSchedule = parseBreakSchedule(scheduleText);
-
-    // Mapuj kolumny ze stałych offsetów od START DANYCH
-    colMap.machine = dataStartColIndex + 1;
-    colMap.awarie = dataStartColIndex + 2;
-    colMap.netTime = dataStartColIndex + 3;
-    colMap.loadingTime = dataStartColIndex + 4;
-    colMap.breakTime = dataStartColIndex + 5;
-    colMap.totalKits = dataStartColIndex + 6;
-    colMap.avgWorkers = dataStartColIndex + 7;
-    colMap.breakCodes = dataStartColIndex + 8;
-    colMap.intervalsStart = dataStartColIndex + 9;
+    noPassMode = parsed.foundNoPass;
+    rawBreakScheduleText = parsed.scheduleText;
+    globalBreakSchedule = parseBreakSchedule(parsed.scheduleText);
 
     // Sprawdź i utwórz nagłówki jeśli brakuje
-    const headerRow = Math.max(itemRow, startDayRow, dataStartHeaderRow);
     const expectedHeaders = [
         { offset: 1, name: "MASZYNA" },
         { offset: 2, name: "AWARIE DANE" },
@@ -994,19 +1682,24 @@ async function initializeColumnMap(context) {
     }
 
     if (needsHeaders) {
-        sheetUnprotect(sheet);
-        for (const h of expectedHeaders) {
-            sheet.getCell(headerRow, dataStartColIndex + h.offset).values = [[h.name]];
-        }
-        // Dodaj komentarz/notatkę do CZAS NETTO
+        beginInternalWrite();
         try {
-            const netTimeCell = sheet.getCell(headerRow, colMap.netTime);
-            context.workbook.comments.add(netTimeCell, "Czas z sumy przedziałów - awarie - przerwy + ładowanie materiału");
-        } catch (e) {
-            console.warn("Nie udało się dodać komentarza do CZAS NETTO:", e);
+            sheetUnprotect(sheet);
+            for (const h of expectedHeaders) {
+                sheet.getCell(headerRow, dataStartColIndex + h.offset).values = [[h.name]];
+            }
+            // Dodaj komentarz/notatkę do CZAS NETTO
+            try {
+                const netTimeCell = sheet.getCell(headerRow, colMap.netTime);
+                context.workbook.comments.add(netTimeCell, "Czas z sumy przedziałów - awarie - przerwy + ładowanie materiału");
+            } catch (e) {
+                console.warn("Nie udało się dodać komentarza do CZAS NETTO:", e);
+            }
+            sheetProtect(sheet);
+            await context.sync();
+        } finally {
+            endInternalWrite();
         }
-        sheetProtect(sheet);
-        await context.sync();
     }
 
     dataStartRowIndex = headerRow + 1;
@@ -1019,6 +1712,8 @@ async function initializeColumnMap(context) {
         sheetUnprotect(sheet);
         await context.sync();
     }
+
+    await ensureSheetChangeListener(context, sheet);
 }
 
 function updateModeUI() {
@@ -1107,10 +1802,12 @@ async function scanForUnfinished(context) {
         (colMap.startGlobal !== undefined ? colMap.startGlobal : 26),
         (colMap.endGlobal !== undefined ? colMap.endGlobal : 27),
         (colMap.item !== undefined ? colMap.item : 3),
+        (colMap.rev !== undefined ? colMap.rev : 2),
         (colMap.machine !== undefined ? colMap.machine : 24),
-        (colMap.operator !== undefined ? colMap.operator : 0)
+        (colMap.operator !== undefined ? colMap.operator : 0),
+        (colMap.intervalsStart !== undefined ? colMap.intervalsStart + 6 : 35)
     );
-    const colsToLoad = Math.max(maxColNeeded + 1, 30);
+    const colsToLoad = Math.max(maxColNeeded + 1, 36);
     
     // Zwiększone okno skanowania: min. 3000 wierszy, do 10000 wierszy dla poszatkowanych sekwencji
     let rowsToLoad = 3000;
@@ -1142,20 +1839,36 @@ async function scanForUnfinished(context) {
         
         if (valAA !== "" && valAB === "") {
             foundAny = true;
+            const rowIdx = dataStartRowIndex + i;
             const itemValue = (colMap.item !== undefined && row[colMap.item]) ? row[colMap.item].toString().trim() : "Brak Itemu";
+            const revValue = (colMap.rev !== undefined && row[colMap.rev]) ? row[colMap.rev].toString().trim() : "";
             const machineVal = (colMap.machine !== undefined && row[colMap.machine]) ? row[colMap.machine].toString().trim() : "";
+            const opVal = (colMap.operator !== undefined && row[colMap.operator]) ? row[colMap.operator].toString().trim() : "";
+            const firstIntStart = (colMap.intervalsStart !== undefined && row[colMap.intervalsStart + 5])
+                ? row[colMap.intervalsStart + 5].toString().trim()
+                : "";
+            const manualTag = (firstIntStart === "") ? " (Ręczny start)" : "";
             if (machineVal !== "") {
                 window.unfinishedMachines[machineVal] = {
-                    row: dataStartRowIndex + i,
-                    item: itemValue
+                    row: rowIdx,
+                    item: itemValue,
+                    startGlobalRaw: normCell(valAA)
                 };
             }
-            const opVal = (colMap.operator !== undefined && row[colMap.operator]) ? row[colMap.operator].toString().trim() : "";
             const opStr = opVal ? ` | ${opVal}` : "";
             const btn = document.createElement("button");
             btn.className = "unfinished-item";
-            btn.innerText = `Wiersz ${dataStartRowIndex + i + 1} | Item: ${itemValue}${opStr}`;
-            btn.onclick = () => fetchRowData(dataStartRowIndex + i, true);
+            btn.innerText = `Wiersz ${rowIdx + 1} | Item: ${itemValue}${opStr}${manualTag}`;
+            const expectedSig = {
+                item: normCell(itemValue === "Brak Itemu" ? "" : itemValue),
+                rev: normCell(revValue),
+                startGlobalRaw: normCell(valAA),
+                startGlobalMs: parseCustomDate(valAA),
+                machine: normCell(machineVal),
+                operatorGlobal: normCell(opVal),
+                isRunningJob: false
+            };
+            btn.onclick = () => fetchRowData(rowIdx, true, expectedSig);
             listContainer.appendChild(btn);
         }
     }
@@ -1179,22 +1892,29 @@ function updateModalKitsCalc() {
     document.getElementById("lbl-new-calc-kits").innerText = Math.round(rolls * kitsPerLayer);
 }
 
-async function fetchRowData(forcedRowIndex, isCont) {
+async function fetchRowData(forcedRowIndex, isCont, expectedSig = null) {
     isContinuing = isCont;
     try {
         setStatus("Pobieranie danych...");
         await Excel.run(async (context) => {
             const sheet = context.workbook.worksheets.getActiveWorksheet();
             sheet.load("name");
-            await context.sync();
-            activeSheetName = sheet.name; 
-            
-            let rowIdx = forcedRowIndex;
+            const headerRange = sheet.getRange("A1:GZ25").load("values");
             const activeCell = context.workbook.getActiveCell().load(["rowIndex", "columnIndex"]);
             await context.sync();
+            activeSheetName = sheet.name;
             currentColumnIndex = activeCell.columnIndex;
+
+            // Odśwież mapę kolumn na wypadek dodania/usunięcia kolumn lub wierszy nagłówkowych
+            const parsedHeaders = parseHeaderMatrixToColMap(headerRange.values);
+            if (parsedHeaders.missing.length > 0) {
+                throw new Error("Brakuje kolumn: " + parsedHeaders.missing.join(", "));
+            }
+            applyParsedHeaderMap(parsedHeaders);
+            await ensureSheetChangeListener(context, sheet);
             
-            if (rowIdx === null) {
+            let rowIdx = forcedRowIndex;
+            if (rowIdx === null || rowIdx === undefined) {
                 rowIdx = activeCell.rowIndex;
             }
             if (rowIdx < dataStartRowIndex) {
@@ -1203,10 +1923,21 @@ async function fetchRowData(forcedRowIndex, isCont) {
             }
             currentRowIndex = rowIdx;
             
-            // Pobieramy cały wiersz (do 250 kolumn), co zmniejsza liczbę requestów.
-            const rowRange = sheet.getRangeByIndexes(currentRowIndex, 0, 1, 250).load("values");
+            // Pobieramy cały wiersz (values + text dla niezawodnego odczytu ręcznie wpisanych dat/godzin)
+            const rowRange = sheet.getRangeByIndexes(currentRowIndex, 0, 1, 250).load(["values", "text"]);
             await context.sync();
-            const vals = rowRange.values[0];
+            let vals = rowRange.values[0];
+            let txts = (rowRange.text && rowRange.text[0]) ? rowRange.text[0] : null;
+
+            // Jeśli wybrano pozycję z listy "Kontynuuj", a w międzyczasie ktoś dodał/usunął wiersze, odnajdź właściwy wiersz
+            if (expectedSig && !doesRowMatchSignature(vals, expectedSig)) {
+                const found = await searchForMovedRow(context, sheet, currentRowIndex, expectedSig);
+                if (found && found.rowIndex >= dataStartRowIndex) {
+                    currentRowIndex = found.rowIndex;
+                    vals = found.rowValues;
+                    txts = null;
+                }
+            }
             
             // Weryfikacja zakończenia
             const valAB = vals[colMap.endGlobal] ? vals[colMap.endGlobal].toString().trim() : "";
@@ -1214,8 +1945,14 @@ async function fetchRowData(forcedRowIndex, isCont) {
                 setStatus("UWAGA: Ten produkt został już całkowicie zakończony!");
                 return;
             }
-            const valAA = vals[colMap.startGlobal] ? vals[colMap.startGlobal].toString().trim() : "";
+            const rawStartGlobal = vals[colMap.startGlobal];
+            const txtStartGlobal = txts ? txts[colMap.startGlobal] : "";
+            const valAA = (rawStartGlobal !== undefined && rawStartGlobal !== null && rawStartGlobal.toString().trim() !== "")
+                ? rawStartGlobal.toString().trim()
+                : (txtStartGlobal ? txtStartGlobal.toString().trim() : "");
             isContinuing = (valAA !== "");
+            isManualStart = false;
+            manualStartTimestamp = 0;
             
             if (isContinuing) {
                 document.getElementById("btn-prev-row").style.display = "none";
@@ -1252,14 +1989,19 @@ async function fetchRowData(forcedRowIndex, isCont) {
             document.getElementById("in-workers").value = "4";
             
             selectedMachineForContinuation = vals[colMap.machine] ? vals[colMap.machine].toString().trim() : "";
-            currentWorkerGlobalString = vals[colMap.workers] ? vals[colMap.workers].toString() : "";
+            currentWorkerGlobalString = (vals[colMap.workers] !== undefined && vals[colMap.workers] !== null) ? vals[colMap.workers].toString().replace(/^'/, "") : "";
             previousGlobalWorkerString = currentWorkerGlobalString; // Zachowaj historię
-            currentOperatorGlobalString = vals[colMap.operator] ? vals[colMap.operator].toString() : "";
-            totalAwariaSecondsGlobal = hmsToSeconds(vals[colMap.awarie] ? vals[colMap.awarie].toString() : "00:00:00");
+            currentOperatorGlobalString = (vals[colMap.operator] !== undefined && vals[colMap.operator] !== null) ? vals[colMap.operator].toString().replace(/^'/, "") : "";
+
+            let awariaRaw = vals[colMap.awarie] ? vals[colMap.awarie] : "";
+            if (!awariaRaw && colMap.userAwarie !== undefined && vals[colMap.userAwarie]) {
+                awariaRaw = vals[colMap.userAwarie];
+            }
+            totalAwariaSecondsGlobal = hmsToSeconds(awariaRaw || "00:00:00");
             
             let loadedLoadingSeconds = 0;
             if (colMap.loadingTime !== undefined && vals[colMap.loadingTime]) {
-                loadedLoadingSeconds = hmsToSeconds(vals[colMap.loadingTime].toString());
+                loadedLoadingSeconds = hmsToSeconds(vals[colMap.loadingTime]);
             }
             totalLoadingSecondsGlobal = loadedLoadingSeconds;
             
@@ -1322,6 +2064,16 @@ async function fetchRowData(forcedRowIndex, isCont) {
                     }
                 }
 
+                // Jeśli Start (Day+Hour) jest wpisany, a nie ma jeszcze żadnego przedziału w kolumnach nakładki -> RĘCZNY START
+                if (isContinuing && lastIntervalIndex === -1) {
+                    isManualStart = true;
+                    lastIntervalUnexpected = false;
+                    manualStartTimestamp = parseExcelCellDate(rawStartGlobal, txtStartGlobal);
+                    if (!isNaN(manualStartTimestamp) && manualStartTimestamp > 0 && manualStartTimestamp <= Date.now()) {
+                        loadedIntervals.push({ start: manualStartTimestamp, end: Date.now() });
+                    }
+                }
+
                 if (globalBreakSchedule && globalBreakSchedule.length > 0 && loadedIntervals.length > 0) {
                     const res = findOverlappingBreaks(loadedIntervals, globalBreakSchedule);
                     currentBreakOverlapInfo = res.overlapInfo || {};
@@ -1365,16 +2117,44 @@ async function fetchRowData(forcedRowIndex, isCont) {
             
             if (isContinuing) {
                 document.getElementById("btn-to-machine").innerText = "KONTYNUUJ PROCES";
-                // Jeśli kontynuujemy, to in-workers ustawiamy na domyślne 4 (bo zaczyna nową zmianę), operator też puste.
-                document.getElementById("in-operator").value = "";
-                document.getElementById("in-workers").value = "4";
+                if (isManualStart) {
+                    // Dla ręcznie wystartowanego wiersza podstaw dane wpisane ręcznie w Excelu (operator i liczba pracowników)
+                    const opParts = currentOperatorGlobalString.split("/").map(s => s.trim()).filter(Boolean);
+                    document.getElementById("in-operator").value = opParts.length > 0 ? opParts[opParts.length - 1] : "";
+                    const wInfo = parseManualWorkersInfo(currentWorkerGlobalString);
+                    document.getElementById("in-workers").value = wInfo.currentWorkers.toString();
+                } else if (lastIntervalUnexpected && lastIntervalIndex >= 0) {
+                    // Dla przerwanego przedziału podstaw operatora i pracowników z tego przedziału, aby wznowienie nie nadpisało ich "Brak"
+                    const lastOpCell = vals[colMap.intervalsStart + 1 + (lastIntervalIndex * 7) + 0];
+                    const lastWStopCell = vals[colMap.intervalsStart + 1 + (lastIntervalIndex * 7) + 2];
+                    const lastWStartCell = vals[colMap.intervalsStart + 1 + (lastIntervalIndex * 7) + 1];
+                    const opParts = currentOperatorGlobalString.split("/").map(s => s.trim()).filter(Boolean);
+                    document.getElementById("in-operator").value = lastOpCell
+                        ? lastOpCell.toString().trim()
+                        : (opParts.length > 0 ? opParts[opParts.length - 1] : "");
+                    const wVal = parseFloat(lastWStopCell) || parseFloat(lastWStartCell) || parseManualWorkersInfo(currentWorkerGlobalString).currentWorkers || 4;
+                    document.getElementById("in-workers").value = wVal.toString();
+                } else {
+                    // Kolejna zmiana po poprawnie zamkniętej poprzedniej zmianie
+                    document.getElementById("in-operator").value = "";
+                    document.getElementById("in-workers").value = "4";
+                }
             } else {
                 document.getElementById("btn-to-machine").innerText = "DALEJ";
             }
+
+            // Zapisz sygnaturę wiersza i powiąż komórkę w Excelu, aby śledzić ewentualne dodanie/usunięcie wierszy
+            activeRowSignature = buildRowSignatureFromValues(vals, currentRowIndex, false);
+            await bindTrackedRowCell(context, sheet, currentRowIndex);
+            updateRowIndicatorsUI(currentRowIndex);
             
             document.getElementById("initial-card").classList.add("hidden");
             document.getElementById("data-card").classList.remove("hidden");
-            setStatus(`Pobrano dane z wiersza ${currentRowIndex + 1}.`);
+            if (isManualStart) {
+                setStatus(`Wykryto ręczny start w wierszu ${currentRowIndex + 1}. Kliknij Kontynuuj Proces, aby przejąć licznik.`);
+            } else {
+                setStatus(`Pobrano dane z wiersza ${currentRowIndex + 1}.`);
+            }
         });
     } catch (error) {
         console.error(error);
@@ -1383,7 +2163,7 @@ async function fetchRowData(forcedRowIndex, isCont) {
 }
 
 function handleToMachineClick() {
-    if (isContinuing && lastIntervalUnexpected) {
+    if (isContinuing && lastIntervalUnexpected && !isManualStart) {
         document.getElementById("data-card").classList.add("hidden");
         document.getElementById("unexpected-card").classList.remove("hidden");
     } else {
@@ -1398,10 +2178,21 @@ document.getElementById("btn-unexp-finished").onclick = async () => {
     const btn = document.getElementById("btn-unexp-finished");
     if (btn) btn.disabled = true;
     resumeUnexpected = false;
+    beginInternalWrite();
     try {
         await Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+            await ensureRowAndColumnsSynced(ctx, sheet);
             sheetUnprotect(sheet);
+            if (lastIntervalIndex >= 0 && colMap.intervalsStart !== undefined) {
+                const stopCol = colMap.intervalsStart + 1 + (lastIntervalIndex * 7) + 5;
+                const stopCell = sheet.getCell(currentRowIndex, stopCol).load("values");
+                await ctx.sync();
+                if (!stopCell.values[0][0]) {
+                    stopCell.values = [[getExcelDateNumber()]];
+                    stopCell.numberFormat = [["yyyy-mm-dd hh:mm"]];
+                }
+            }
             sheet.getCell(currentRowIndex, colMap.intervalsStart).values = [["ZAMKNIĘTO"]];
             sheetProtect(sheet);
             await ctx.sync();
@@ -1411,6 +2202,7 @@ document.getElementById("btn-unexp-finished").onclick = async () => {
     } catch (e) {
         setStatus("Błąd dopisywania ZAMKNIĘTO: " + e.message);
     } finally {
+        endInternalWrite();
         if (btn) btn.disabled = false;
         isStartingProcess = false;
     }
@@ -1446,7 +2238,7 @@ async function showMachineSelection() {
                 
                 if (isContinuing && selectedMachineForContinuation && s.name.trim() === selectedMachineForContinuation) {
                     opt.selected = true;
-                } else if (!isContinuing && s.name === activeSheetName) {
+                } else if ((!isContinuing || !selectedMachineForContinuation) && s.name === activeSheetName) {
                     opt.selected = true;
                 }
                 
@@ -1470,7 +2262,11 @@ function handleStartTimerClick() {
     // Weryfikacja innej otwartej pracy na tej samej maszynie
     if (window.unfinishedMachines && window.unfinishedMachines[machine]) {
         const unfin = window.unfinishedMachines[machine];
-        if (unfin.row !== currentRowIndex) {
+        const isSameContinuedJob = isContinuing && activeRowSignature && (
+            unfin.row === currentRowIndex ||
+            (unfin.item === activeRowSignature.item && unfin.startGlobalRaw && unfin.startGlobalRaw === activeRowSignature.startGlobalRaw)
+        );
+        if (!isSameContinuedJob && unfin.row !== currentRowIndex) {
             document.getElementById("machine-warning-text").innerText = `Na maszynie ${machine} znajduje się już niezakończony produkt (Wiersz ${unfin.row + 1}: Item ${unfin.item}).\n\nCzy na pewno chcesz rozpocząć nowe cięcie na tej maszynie?`;
             document.getElementById("machine-card").classList.add("hidden");
             document.getElementById("machine-warning-card").classList.remove("hidden");
@@ -1500,9 +2296,32 @@ async function writeStartTime() {
     if (btnWarn) btnWarn.disabled = true;
     if (btnResume) btnResume.disabled = true;
 
-    const operator = document.getElementById("in-operator").value.trim() || "Brak";
-    startWorkersCount = parseInt(document.getElementById("in-workers").value) || 4;
-    currentWorkersCount = startWorkersCount;
+    let operator = document.getElementById("in-operator").value.trim();
+    if (!operator && (isManualStart || resumeUnexpected) && currentOperatorGlobalString.trim()) {
+        const opParts = currentOperatorGlobalString.split("/").map(s => s.trim()).filter(Boolean);
+        operator = opParts.length > 0 ? opParts[opParts.length - 1] : "Brak";
+    }
+    if (!operator) operator = "Brak";
+
+    const inputWorkers = parseInt(document.getElementById("in-workers").value) || 4;
+    if (isManualStart) {
+        const wInfo = parseManualWorkersInfo(currentWorkerGlobalString);
+        if (inputWorkers === wInfo.currentWorkers && wInfo.diff !== 0) {
+            startWorkersCount = wInfo.baseWorkers;
+            currentWorkersCount = wInfo.currentWorkers;
+            intervalWorkerDiff = wInfo.diff;
+            previousGlobalWorkerString = wInfo.prefix;
+        } else {
+            startWorkersCount = inputWorkers;
+            currentWorkersCount = inputWorkers;
+            intervalWorkerDiff = 0;
+            previousGlobalWorkerString = "";
+            currentWorkerGlobalString = startWorkersCount.toString();
+        }
+    } else {
+        startWorkersCount = inputWorkers;
+        currentWorkersCount = startWorkersCount;
+    }
     document.getElementById("val-current-workers").innerText = currentWorkersCount;
     
     let realRolls = document.getElementById("in-real-rolls").value;
@@ -1511,19 +2330,40 @@ async function writeStartTime() {
     }
     let machine = document.getElementById("sel-machine").value;
     
-    if (!machine && resumeUnexpected) {
-        machine = selectedMachineForContinuation;
+    if (!machine && (resumeUnexpected || isManualStart)) {
+        machine = selectedMachineForContinuation || activeSheetName;
     }
     
+    beginInternalWrite();
     try {
         setStatus("Rozpoczynanie...");
         await Excel.run(async (context) => {
             const sheet = context.workbook.worksheets.getItem(activeSheetName);
+            // Upewnij się, że wiersz i kolumny nie przesunęły się od momentu pobrania danych
+            await ensureRowAndColumnsSynced(context, sheet);
+
             sheetUnprotect(sheet);
             const dateNum = getExcelDateNumber();
+            let activeIntStartRaw = dateNum.toString();
+            let activeIntStartMs = parseCustomDate(dateNum);
+            const startingFromManual = isManualStart;
             
             // Global Strings Updates
-            if (!resumeUnexpected) {
+            if (startingFromManual) {
+                // Dla ręcznego startu nie duplikujemy wpisu (np. "AB/AB" ani "4/4"), lecz przejmujemy pierwszy przedział
+                const opParts = currentOperatorGlobalString.split("/").map(s => s.trim()).filter(Boolean);
+                if (opParts.length <= 1) {
+                    currentOperatorGlobalString = operator;
+                } else if (opParts[opParts.length - 1] !== operator) {
+                    opParts[opParts.length - 1] = operator;
+                    currentOperatorGlobalString = opParts.join("/");
+                }
+                if (!currentWorkerGlobalString) {
+                    currentWorkerGlobalString = currentWorkersCount.toString();
+                }
+                sheet.getCell(currentRowIndex, colMap.operator).values = [[safeStr(currentOperatorGlobalString)]];
+                sheet.getCell(currentRowIndex, colMap.workers).values = [[safeStr(currentWorkerGlobalString)]];
+            } else if (!resumeUnexpected) {
                 if (currentOperatorGlobalString === "") {
                     currentOperatorGlobalString = operator;
                 } else {
@@ -1548,15 +2388,52 @@ async function writeStartTime() {
             sheet.getCell(currentRowIndex, colMap.intervalsStart).values = [[""]]; // Wyczyszczenie ZAMKNIĘTO
             
             // Znajdowanie przedziału
-            if (resumeUnexpected && lastIntervalIndex >= 0) {
+            if (startingFromManual) {
+                currentIntervalIndex = 0;
+                currentIntervalStartCol = colMap.intervalsStart + 1;
+
+                const startGlobalCell = sheet.getCell(currentRowIndex, colMap.startGlobal).load(["values", "text"]);
+                await context.sync();
+                let tManual = parseExcelCellDate(
+                    startGlobalCell.values && startGlobalCell.values[0] ? startGlobalCell.values[0][0] : "",
+                    startGlobalCell.text && startGlobalCell.text[0] ? startGlobalCell.text[0][0] : ""
+                );
+                if (isNaN(tManual) || tManual <= 0) {
+                    tManual = (manualStartTimestamp > 0 && !isNaN(manualStartTimestamp)) ? manualStartTimestamp : Date.now();
+                }
+                if (tManual > Date.now()) {
+                    tManual = Date.now();
+                }
+
+                const manualExcelNum = getExcelDateNumber(new Date(tManual));
+                // Upewnij się, że komórka Start (Day+Hour) zawiera znormalizowaną datę Excela
+                sheet.getCell(currentRowIndex, colMap.startGlobal).values = [[manualExcelNum]];
+
+                const startIntCell = sheet.getCell(currentRowIndex, currentIntervalStartCol + 4);
+                startIntCell.values = [[manualExcelNum]];
+                startIntCell.numberFormat = [["yyyy-mm-dd hh:mm"]];
+
+                const stopIntCell = sheet.getCell(currentRowIndex, currentIntervalStartCol + 5);
+                stopIntCell.values = [[dateNum]];
+                stopIntCell.numberFormat = [["yyyy-mm-dd hh:mm"]];
+
+                activeIntStartRaw = manualExcelNum.toString();
+                activeIntStartMs = tManual;
+                currentIntervalLoadingSeconds = 0;
+                previousTotalGrossSeconds = 0;
+                secondsElapsed = Math.max(0, Math.floor((Date.now() - tManual) / 1000));
+            } else if (resumeUnexpected && lastIntervalIndex >= 0) {
                 currentIntervalIndex = lastIntervalIndex;
                 currentIntervalStartCol = colMap.intervalsStart + 1 + (currentIntervalIndex * 7);
                 
                 // Read Start Time to calculate secondsElapsed accurately
-                const startCell = sheet.getCell(currentRowIndex, currentIntervalStartCol + 4).load("values");
+                const startCell = sheet.getCell(currentRowIndex, currentIntervalStartCol + 4).load(["values", "text"]);
                 await context.sync();
                 const sVal = startCell.values[0][0] ? startCell.values[0][0].toString().replace(/^'/, "") : dateNum;
-                const tStart = parseCustomDate(sVal);
+                const sTxt = (startCell.text && startCell.text[0]) ? startCell.text[0][0] : "";
+                const tStart = parseExcelCellDate(sVal, sTxt);
+                activeIntStartRaw = normCell(sVal);
+                activeIntStartMs = tStart;
                 if (!isNaN(tStart)) {
                     secondsElapsed = Math.floor((new Date().getTime() - tStart) / 1000);
                     if (secondsElapsed < 0) secondsElapsed = 0;
@@ -1605,12 +2482,50 @@ async function writeStartTime() {
             sheet.getCell(currentRowIndex, currentIntervalStartCol + 3).values = [[realRolls]];
             sheetProtect(sheet);
             await context.sync();
+
+            // Zaktualizuj sygnaturę aktywnego zadania do śledzenia wiersza w trakcie odliczania
+            if (!activeRowSignature) {
+                activeRowSignature = {
+                    sheetName: activeSheetName,
+                    originalRowIndex: currentRowIndex,
+                    item: normCell(document.getElementById("val-item").innerText),
+                    rev: normCell(document.getElementById("val-rev").innerText),
+                    product: normCell(document.getElementById("val-product").innerText),
+                    nesting: normCell(document.getElementById("val-nesting").innerText),
+                    startGlobalRaw: startingFromManual ? activeIntStartRaw : dateNum.toString(),
+                    startGlobalMs: startingFromManual ? activeIntStartMs : parseCustomDate(dateNum),
+                    endGlobalRaw: "",
+                    machine: normCell(machine),
+                    operatorGlobal: normCell(currentOperatorGlobalString),
+                    workersGlobal: normCell(currentWorkerGlobalString),
+                    activeIntervalIndex: currentIntervalIndex,
+                    activeIntervalStartRaw: activeIntStartRaw,
+                    activeIntervalStartMs: activeIntStartMs,
+                    isRunningJob: true
+                };
+            } else {
+                activeRowSignature.originalRowIndex = currentRowIndex;
+                if (!isContinuing || startingFromManual) {
+                    activeRowSignature.startGlobalRaw = startingFromManual ? activeIntStartRaw : dateNum.toString();
+                    activeRowSignature.startGlobalMs = startingFromManual ? activeIntStartMs : parseCustomDate(dateNum);
+                }
+                activeRowSignature.endGlobalRaw = "";
+                activeRowSignature.machine = normCell(machine);
+                activeRowSignature.operatorGlobal = normCell(currentOperatorGlobalString);
+                activeRowSignature.workersGlobal = normCell(currentWorkerGlobalString);
+                activeRowSignature.activeIntervalIndex = currentIntervalIndex;
+                activeRowSignature.activeIntervalStartRaw = activeIntStartRaw;
+                activeRowSignature.activeIntervalStartMs = activeIntStartMs;
+                activeRowSignature.isRunningJob = true;
+            }
+            await bindTrackedRowCell(context, sheet, currentRowIndex);
             
             const iTxt = document.getElementById("val-item").innerText;
             const rTxt = document.getElementById("val-rev").innerText;
             const pTxt = document.getElementById("val-product").innerText;
             document.getElementById("running-info").innerHTML = `Item: ${iTxt}, Rev: ${rTxt}<br>Prod: ${pTxt}`;
             document.getElementById("running-rolls-display").innerText = realRolls;
+            updateRowIndicatorsUI(currentRowIndex);
             
             document.getElementById("machine-card").classList.add("hidden");
             document.getElementById("running-card").classList.remove("hidden");
@@ -1618,8 +2533,9 @@ async function writeStartTime() {
             document.getElementById("main-header").classList.add("hidden");
             
             clearAllTimers();
-            if (resumeUnexpected) {
+            if (resumeUnexpected || startingFromManual) {
                 intervalStartTimestamp = Date.now() - (secondsElapsed * 1000);
+                forceTargetUpdate = true;
             } else {
                 intervalStartTimestamp = Date.now();
                 secondsElapsed = 0;
@@ -1627,13 +2543,20 @@ async function writeStartTime() {
             startTimer();
             startAutoSave();
             resumeUnexpected = false;
+            isManualStart = false;
             saveActiveSession();
-            setStatus("W trakcie pracy...");
+            if (startingFromManual) {
+                setTimeout(() => {
+                    autoDetectBreaksForCurrentJob().catch(e => console.warn(e));
+                }, 200);
+            }
+            setStatus(`W trakcie pracy (Wiersz ${currentRowIndex + 1})...`);
         });
     } catch (error) {
         console.error(error);
         setStatus("Błąd Start: " + error.message);
     } finally {
+        endInternalWrite();
         isStartingProcess = false;
         if (btnStart) btnStart.disabled = false;
         if (btnWarn) btnWarn.disabled = false;
@@ -1717,9 +2640,12 @@ function startAutoSave() {
     }
     autoSaveInterval = setInterval(async () => {
         if (currentRowIndex !== -1 && currentIntervalStartCol !== -1) {
+            beginInternalWrite();
             try {
                 await Excel.run(async (ctx) => {
                     const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+                    await ensureRowAndColumnsSynced(ctx, sheet);
+
                     sheetUnprotect(sheet);
                     const autoSaveCell = sheet.getCell(currentRowIndex, currentIntervalStartCol + 5);
                     autoSaveCell.values = [[getExcelDateNumber()]];
@@ -1751,6 +2677,8 @@ function startAutoSave() {
                 saveActiveSession();
             } catch (e) {
                 console.warn("Autozapis w tle:", e);
+            } finally {
+                endInternalWrite();
             }
         }
     }, 30000);
@@ -1783,16 +2711,21 @@ function adjustWorkers(amount) {
     } else {
         currentWorkerGlobalString = previousGlobalWorkerString + "/" + startWorkersCount.toString() + diffStr;
     }
+    if (activeRowSignature) {
+        activeRowSignature.workersGlobal = normCell(currentWorkerGlobalString);
+    }
     
     // Auto update excel values (End workers + Global string)
+    beginInternalWrite();
     Excel.run(async (ctx) => {
         const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+        await ensureRowAndColumnsSynced(ctx, sheet);
         sheetUnprotect(sheet);
         sheet.getCell(currentRowIndex, colMap.workers).values = [[safeStr(currentWorkerGlobalString)]];
         sheet.getCell(currentRowIndex, currentIntervalStartCol + 2).values = [[currentWorkersCount]];
         sheetProtect(sheet);
         await ctx.sync();
-    }).catch(e => console.warn(e));
+    }).catch(e => console.warn(e)).finally(() => endInternalWrite());
     
     saveActiveSession();
 }
@@ -1839,8 +2772,10 @@ function toggleAwaria() {
         awariaSecondsElapsed = 0;
         
         // Zapisz sumę awarii do excela
+        beginInternalWrite();
         Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+            await ensureRowAndColumnsSynced(ctx, sheet);
             sheetUnprotect(sheet);
             sheet.getCell(currentRowIndex, colMap.awarie).values = [[safeStr(secondsToHms(totalAwariaSecondsGlobal))]];
             if (colMap.userAwarie !== undefined) {
@@ -1848,7 +2783,7 @@ function toggleAwaria() {
             }
             sheetProtect(sheet);
             await ctx.sync();
-        }).catch(e => console.warn(e));
+        }).catch(e => console.warn(e)).finally(() => endInternalWrite());
     }
     saveActiveSession();
 }
@@ -1892,8 +2827,10 @@ function toggleLoading() {
         loadingStartTimestamp = 0;
         loadingSecondsElapsed = 0;
         
+        beginInternalWrite();
         Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+            await ensureRowAndColumnsSynced(ctx, sheet);
             sheetUnprotect(sheet);
             
             if (currentIntervalStartCol !== -1) {
@@ -1901,7 +2838,7 @@ function toggleLoading() {
             }
             sheetProtect(sheet);
             await ctx.sync();
-        }).catch(e => console.warn(e));
+        }).catch(e => console.warn(e)).finally(() => endInternalWrite());
     }
     saveActiveSession();
 }
@@ -1913,10 +2850,13 @@ async function confirmChangeRolls() {
         return;
     }
 
+    beginInternalWrite();
     try {
         setStatus("Zmiana rolek - zapis...");
         await Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+            await ensureRowAndColumnsSynced(ctx, sheet);
+
             sheetUnprotect(sheet);
             const dateNum = getExcelDateNumber();
             
@@ -1942,6 +2882,12 @@ async function confirmChangeRolls() {
             newStart.numberFormat = [["yyyy-mm-dd hh:mm"]];
             sheetProtect(sheet);
             await ctx.sync();
+
+            if (activeRowSignature) {
+                activeRowSignature.activeIntervalIndex = currentIntervalIndex;
+                activeRowSignature.activeIntervalStartRaw = dateNum.toString();
+                activeRowSignature.activeIntervalStartMs = parseCustomDate(dateNum);
+            }
             
             document.getElementById("in-real-rolls").value = newRolls;
             updateKitsCalc();
@@ -1951,8 +2897,9 @@ async function confirmChangeRolls() {
             const pTxt = document.getElementById("val-product").innerText;
             document.getElementById("running-info").innerHTML = `Item: ${iTxt}, Rev: ${rTxt}<br>Prod: ${pTxt}`;
             document.getElementById("running-rolls-display").innerText = newRolls;
+            updateRowIndicatorsUI(currentRowIndex);
             
-            setStatus("Zmieniono rolki. Przedział rozdzielony.");
+            setStatus(`Zmieniono rolki (Wiersz ${currentRowIndex + 1}). Przedział rozdzielony.`);
             document.getElementById("change-rolls-panel").classList.add("hidden");
             document.getElementById("in-new-rolls").value = "";
         });
@@ -1960,6 +2907,8 @@ async function confirmChangeRolls() {
     } catch (e) {
         console.error(e);
         setStatus("Błąd zmiany rolek: " + e.message);
+    } finally {
+        endInternalWrite();
     }
 }
 
@@ -1984,13 +2933,14 @@ async function handleStop() {
         console.error("Błąd podczas automatycznego wykrywania przerw:", e);
     }
 
+    updateRowIndicatorsUI(currentRowIndex);
     document.getElementById("running-card").classList.add("hidden");
     document.getElementById("incidents-card").classList.add("hidden");
     document.getElementById("main-header").classList.remove("hidden");
     document.getElementById("incidents-card").classList.remove("hidden");
     document.body.classList.remove("timer-active"); // Usuń zielone tło
     saveActiveSession();
-    setStatus("Czas zatrzymany. Wybierz opcję zakończenia.");
+    setStatus(`Czas zatrzymany (Wiersz ${currentRowIndex + 1}). Wybierz opcję zakończenia.`);
 }
 
 async function saveIncidents(fullComplete) {
@@ -2020,10 +2970,16 @@ async function saveIncidents(fullComplete) {
     const totalBreakMs = totalBreakSeconds * 1000;
     const incidentsText = document.getElementById("in-other-incidents").value;
     
+    beginInternalWrite();
     try {
         setStatus("Zapisywanie w toku... Proszę czekać.");
+        let savedHumanRow = currentRowIndex + 1;
         await Excel.run(async (context) => {
             const sheet = context.workbook.worksheets.getItem(activeSheetName);
+            // Upewnij się przed zapisem końcowym, że wiersz ani kolumny nie przesunęły się w trakcie pracy
+            await ensureRowAndColumnsSynced(context, sheet);
+            savedHumanRow = currentRowIndex + 1;
+
             sheetUnprotect(sheet);
             const dateNum = getExcelDateNumber();
             
@@ -2151,7 +3107,7 @@ async function saveIncidents(fullComplete) {
         
         clearActiveSession();
         resetUI();
-        setStatus(fullComplete ? "Zakończono produkt pomyślnie!" : "Przerwano produkt. Zapisano zmianę.");
+        setStatus(fullComplete ? `Zakończono produkt pomyślnie (Wiersz ${savedHumanRow})!` : `Przerwano produkt. Zapisano zmianę (Wiersz ${savedHumanRow}).`);
         
         // Skanowanie w tle - natychmiast odblokowuje widok
         setTimeout(() => {
@@ -2170,6 +3126,7 @@ async function saveIncidents(fullComplete) {
             alert("Wystąpił problem z zapisem do Excela: " + error.message + "\n\nSprawdź czy arkusz nie jest zablokowany i spróbuj ponownie.");
         }
     } finally {
+        endInternalWrite();
         isSavingProcess = false;
         if (btnFull) { btnFull.disabled = false; btnFull.innerText = origFullText || "Zakończ całkowicie Produkt"; }
         if (btnPartial) { btnPartial.disabled = false; btnPartial.innerText = origPartialText || "Zakończ na dzisiaj"; }
@@ -2179,7 +3136,12 @@ async function saveIncidents(fullComplete) {
 function resetUI() {
     clearAllTimers();
     clearActiveSession();
+    activeRowSignature = null;
+    currentRowIndex = -1;
+    updateRowIndicatorsUI(-1);
     resumeUnexpected = false;
+    isManualStart = false;
+    manualStartTimestamp = 0;
     isStartingProcess = false;
     intervalStartTimestamp = 0;
     awariaStartTimestamp = 0;
@@ -2245,9 +3207,27 @@ if (admOverlay) {
 
 async function fetchAdminSelection() {
     return Excel.run(async (ctx) => {
+        const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+        if (currentRowIndex >= 0 && activeRowSignature) {
+            await ensureRowAndColumnsSynced(ctx, sheet);
+        } else {
+            const headerRange = sheet.getRange("A1:GZ25").load("values");
+            await ctx.sync();
+            const parsed = parseHeaderMatrixToColMap(headerRange.values, currentSheetMode);
+            if (parsed.valid) applyParsedHeaderMap(parsed);
+        }
         const sel = ctx.workbook.getSelectedRange().load("rowIndex");
         await ctx.sync();
-        return sel.rowIndex;
+        const rIdx = sel.rowIndex;
+        if (rIdx >= dataStartRowIndex) {
+            const maxCol = Math.max((colMap.intervalsStart || 100) + 72, 180);
+            const rowRange = sheet.getRangeByIndexes(rIdx, 0, 1, maxCol).load("values");
+            await ctx.sync();
+            adminRowSignature = buildRowSignatureFromValues(rowRange.values[0]);
+        } else {
+            adminRowSignature = null;
+        }
+        return rIdx;
     });
 }
 
@@ -2582,18 +3562,6 @@ document.getElementById("btn-admin-save").onclick = async () => {
     const errorEl = document.getElementById("admin-error-msg");
     if (errorEl) errorEl.classList.add("hidden");
     
-    // Zabezpieczenia dla pracującego wiersza
-    if (adminRowIndex === currentRowIndex && timerInterval !== null) {
-        if (currentAdminAction === "DEL_ONE") {
-            showAdminError("Nie możesz skasować pozycji, nad którą obecnie pracuje licznik.");
-            setStatus("Gotowe."); return;
-        }
-        if (currentAdminAction === "END") {
-            showAdminError("Nie można edytować końca pozycji, nad którą obecnie pracuje licznik.");
-            setStatus("Gotowe."); return;
-        }
-    }
-    
     const nowMs = Date.now();
     let newD_start = NaN, newD_end = NaN, newD_cStart = NaN, newD_cEnd = NaN;
     if (currentAdminAction === "START") {
@@ -2611,9 +3579,36 @@ document.getElementById("btn-admin-save").onclick = async () => {
         if (newD_cStart.getTime() > nowMs || newD_cEnd.getTime() > nowMs) { showAdminError("Data i godzina nie może być z przyszłości!"); setStatus("Gotowe."); return; }
     }
 
+    beginInternalWrite();
     try {
         await Excel.run(async (ctx) => {
             const sheet = ctx.workbook.worksheets.getItem(activeSheetName);
+            
+            // Synchronizuj aktywny wiersz licznika i kolumny przed operacją Admina
+            if (currentRowIndex >= 0 && activeRowSignature) {
+                await ensureRowAndColumnsSynced(ctx, sheet);
+            }
+            if (currentAdminAction !== "DEL_MULTI" && adminRowIndex >= 0 && adminRowSignature) {
+                const admSync = await ensureRowAndColumnsSynced(ctx, sheet, {
+                    targetRowIndex: adminRowIndex,
+                    signature: adminRowSignature,
+                    updateGlobalState: false
+                });
+                if (!admSync.ok) {
+                    throw new Error("ADMIN_ROW_NOT_FOUND");
+                }
+                adminRowIndex = admSync.rowIndex;
+            }
+            
+            // Zabezpieczenia dla pracującego wiersza (po aktualizacji indeksów)
+            if (adminRowIndex === currentRowIndex && timerInterval !== null) {
+                if (currentAdminAction === "DEL_ONE") {
+                    throw new Error("ADMIN_PROTECT_DEL_ONE");
+                }
+                if (currentAdminAction === "END") {
+                    throw new Error("ADMIN_PROTECT_END");
+                }
+            }
             
             // Ochrona DEL_MULTI przed skasowaniem pracującego wiersza
             if (currentAdminAction === "DEL_MULTI" && timerInterval !== null) {
@@ -2643,8 +3638,9 @@ document.getElementById("btn-admin-save").onclick = async () => {
                 await ctx.sync();
                 const ivals = intRange.values[0];
                 for (let i = 0; i < 10; i++) {
-                    const rolls = parseFloat(ivals[i*6 + 3]) || 0;
-                    if (rolls > 0) {
+                    const rolls = parseFloat(ivals[i*7 + 3]) || 0;
+                    const hasStart = ivals[i*7 + 4] !== "" && ivals[i*7 + 4] !== null && ivals[i*7 + 4] !== undefined;
+                    if (rolls > 0 || hasStart) {
                         const cell = sheet.getCell(adminRowIndex, colMap.intervalsStart + 1 + i*7 + 4);
                         cell.values = [[excelNum]];
                         cell.numberFormat = [["yyyy-mm-dd hh:mm"]];
@@ -2654,7 +3650,7 @@ document.getElementById("btn-admin-save").onclick = async () => {
                 await ctx.sync();
                 await recalculateRowSummary(ctx, sheet, adminRowIndex);
                 
-                // Aktualizacja żywego licznika, jeśli edytujemy bieżący
+                // Aktualizacja żywego licznika i sygnatury, jeśli edytujemy bieżący wiersz
                 if (adminRowIndex === currentRowIndex && timerInterval !== null) {
                     if (adminOldStartMs > 0 && !isNaN(newD_start.getTime())) {
                         const diffMs = newD_start.getTime() - adminOldStartMs;
@@ -2664,6 +3660,15 @@ document.getElementById("btn-admin-save").onclick = async () => {
                             if (typeof forceTargetUpdate !== 'undefined') forceTargetUpdate = true;
                         }
                     }
+                }
+                if (adminRowIndex === currentRowIndex && activeRowSignature) {
+                    activeRowSignature.startGlobalRaw = excelNum.toString();
+                    activeRowSignature.startGlobalMs = newD_start.getTime();
+                    if (activeRowSignature.activeIntervalIndex === 0) {
+                        activeRowSignature.activeIntervalStartRaw = excelNum.toString();
+                        activeRowSignature.activeIntervalStartMs = newD_start.getTime();
+                    }
+                    saveActiveSession();
                 }
                 
             } else if (currentAdminAction === "END") {
@@ -2690,6 +3695,10 @@ document.getElementById("btn-admin-save").onclick = async () => {
                 const newWork = document.getElementById("admin-ops-workers").value || "";
                 sheet.getCell(adminRowIndex, colMap.operator).values = [[newOp.toString()]];
                 sheet.getCell(adminRowIndex, colMap.workers).values = [[newWork.toString()]];
+                if (adminRowIndex === currentRowIndex && activeRowSignature) {
+                    activeRowSignature.operatorGlobal = newOp.toString().trim();
+                    saveActiveSession();
+                }
                 
             } else if (currentAdminAction === "CREATE_NEW") {
                 const op = document.getElementById("admin-create-op").value || "";
@@ -2770,13 +3779,21 @@ document.getElementById("btn-admin-save").onclick = async () => {
         }, 800);
     } catch (e) {
         console.error(e);
-        if (e.message === "ADMIN_PROTECT_DEL_MULTI") {
+        if (e.message === "ADMIN_PROTECT_DEL_ONE") {
+            showAdminError("Nie możesz skasować pozycji, nad którą obecnie pracuje licznik.");
+        } else if (e.message === "ADMIN_PROTECT_END") {
+            showAdminError("Nie można edytować końca pozycji, nad którą obecnie pracuje licznik.");
+        } else if (e.message === "ADMIN_PROTECT_DEL_MULTI") {
             showAdminError("Zaznaczenie obejmuje wiersz, nad którym obecnie pracujesz! Zmień zaznaczenie przed kasowaniem.");
         } else if (e.message === "ADMIN_PROTECT_CREATE_NEW_DATA") {
             showAdminError("Nie można utworzyć wpisu tam, gdzie są już dane. Najpierw użyj opcji 'Skasuj wpis'.");
+        } else if (e.message === "ADMIN_ROW_NOT_FOUND") {
+            showAdminError("Nie udało się odnaleźć edytowanego wiersza (mógł zostać usunięty). Wybierz wiersz ponownie.");
         } else {
             showAdminError("Błąd zapisu: " + e.message);
         }
+    } finally {
+        endInternalWrite();
     }
 };
 
